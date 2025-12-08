@@ -45,8 +45,6 @@ impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
             Player::O => &mut self.player_o,
         };
 
-        // We pass the board state to the strategy.
-        // Strategy returns a Coordinate.
         if let Some(coord) = strategy.get_best_move(self.game.board().state(), current_player) {
             self.game.play_turn(coord)
         } else {

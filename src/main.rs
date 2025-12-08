@@ -50,7 +50,6 @@ fn main() {
         }
     }
 
-    // Q-Learning Training Mode
     if train_mode {
         use hypertictactoe::infrastructure::ai::QLearner;
         println!(
@@ -67,7 +66,6 @@ fn main() {
             QLearner::new(0.1, dimension)
         };
 
-        // Suppress unused variable warning if we don't use it directly in loop logic
         let _num_games = 1_000_000;
 
         println!("Training on billions of games (simulated loop)...");
@@ -78,7 +76,6 @@ fn main() {
             let (max_delta, visited_states) = learner.train(games_per_epoch, dimension);
             total_games += games_per_epoch;
 
-            // Convergence check
             if max_delta < 0.000001 && total_games > 100_000 {
                 println!("Converged! Max Delta: {:.6}", max_delta);
                 learner.save(&q_table_path).expect("Failed to save Q-table");
@@ -102,7 +99,6 @@ fn main() {
         }
     }
 
-    // Helper to load Q-player
     let load_q_player = || {
         use hypertictactoe::infrastructure::ai::QLearner;
         if std::path::Path::new(&q_table_path).exists() {

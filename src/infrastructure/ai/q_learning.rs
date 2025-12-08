@@ -3,8 +3,8 @@ use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::persistence::BitBoardState;
 use crate::infrastructure::symmetries::SymmetryHandler;
 use dashmap::DashMap;
-use rand::Rng;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -64,8 +64,6 @@ pub struct QLearner {
 
 impl QLearner {
     pub fn new(epsilon: f64, dimension: usize) -> Self {
-        // Assume side=3 for standard hyper tictactoe, or we could pass it.
-        // BitBoardState uses typical side=3.
         let symmetry_handler = Arc::new(SymmetryHandler::new(dimension, 3));
 
         Self {
@@ -85,17 +83,14 @@ impl QLearner {
         for (k, v) in &q_table_map {
             dashmap.insert(k.clone(), v.clone());
         }
-        // We need dimension to recreate symmetry handler.
-        // For now, we'll infer it from the first key or pass it?
-        // The `load` signature needs updating or we hardcode/guess.
-        // Actually, we can peak the first key from the loaded map.
+
         let dimension = q_table_map.keys().next().map(|k| k.dimension).unwrap_or(3);
         let symmetry_handler = Arc::new(SymmetryHandler::new(dimension, 3));
 
         Ok(Self {
             q_table: Arc::new(dashmap),
             symmetry_handler,
-            epsilon: 0.0, // Default to inference mode
+            epsilon: 0.0,
             learning_rate: 0.1,
             discount_factor: 0.9,
         })
@@ -104,7 +99,7 @@ impl QLearner {
     pub fn save(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
-        // DashMap doesn't support direct serialization, convert to HashMap first
+
         let map: HashMap<_, _> = self
             .q_table
             .iter()
@@ -117,9 +112,6 @@ impl QLearner {
     pub fn train(&self, num_games: u64, dimension: usize) -> (f64, usize) {
         let batch_size = 1000;
         let num_batches = num_games / batch_size;
-
-        // We need an atomic float for parallel max tracking. Since Rust doesn't have AtomicF64 natively in std,
-        // Given the low contention (once per game end), a simple reduced result might be better.
 
         let max_delta = (0..num_batches)
             .into_par_iter()
@@ -138,27 +130,18 @@ impl QLearner {
                             break;
                         }
 
-                        // For current state S, get canonical S' and map M.
                         let (key, map_idx) = self.get_canonical(&board);
                         let map = &self.symmetry_handler.maps[map_idx];
 
-                        // Available moves also need to be mapped to canonical space to choose action
-                        // But wait, the Q-table stores `(canonical_state, canonical_action)`.
-                        // So we need to choose `canonical_action`.
                         let canonical_moves: Vec<usize> =
                             available_moves.iter().map(|&mv| map[mv]).collect();
 
-                        // Epsilon-greedy in canonical space
                         let canonical_action = if rng.gen_range(0.0..1.0) < self.epsilon {
                             *canonical_moves.choose(&mut rng).unwrap()
                         } else {
                             self.get_best_action(&key, &canonical_moves)
                         };
 
-                        // Map chosen canonical action BACK to real action to play on board
-                        // We need inverse map. Or search map.
-                        // map[real] = canonical => real such that map[real] == canonical_action
-                        // Since maps are bijective permutations, this is unique.
                         let action = map.iter().position(|&val| val == canonical_action).unwrap();
 
                         let mut next_board = board.clone();
@@ -168,24 +151,13 @@ impl QLearner {
                         {
                             let reward = self.calculate_reward(&next_board, current_player);
 
-                            // For next state, we just need its value
-                            let (next_key, _) = self.get_canonical(&next_board); // Don't care about map/action for value
+                            let (next_key, _) = self.get_canonical(&next_board);
 
                             let max_next_q = if reward != 0.0 || next_board.is_full() {
                                 0.0
                             } else {
-                                // To get max value of next state, we look at all available canonical moves from that state
-                                // But wait, `get_available_moves` returns real moves.
-                                // `next_key` corresponds to `next_board` transformed.
-                                // The available moves in `next_key` are the transformed available moves of `next_board`.
-                                // So we can just query the Q-table for that key. The actions in the Q-table ARE the canonical ones.
-                                // We don't even need to map the next moves explicitly if `get_best_value` iterates the stored map?
-                                // No, `get_best_value` takes `moves`.
-                                // So we need: `next_board` available moves -> transformed -> `canonical_next_moves`.
-
                                 let next_moves_real = self.get_available_moves(&next_board);
-                                // We need the map used for `next_key` to transform these moves.
-                                // Re-call get_canonical is slightly inefficient but correct.
+
                                 let (_, next_map_idx) = self.get_canonical(&next_board);
                                 let next_map = &self.symmetry_handler.maps[next_map_idx];
                                 let next_canonical_moves: Vec<usize> =
@@ -279,7 +251,11 @@ impl QLearner {
 
     fn calculate_reward(&self, board: &BitBoardState, player: Player) -> f64 {
         if let Some(winner) = board.check_win() {
-            if winner == player { 1.0 } else { -1.0 }
+            if winner == player {
+                1.0
+            } else {
+                -1.0
+            }
         } else if board.is_full() {
             0.5
         } else {
@@ -287,17 +263,15 @@ impl QLearner {
         }
     }
 
-    // Returns (Canonical Key, Index of Map used)
     fn get_canonical(&self, board: &BitBoardState) -> (QKey, usize) {
-        let mut min_key = QKey::from(board); // Default identity
+        let mut min_key = QKey::from(board);
         let mut min_map_idx = 0;
 
         for (i, map) in self.symmetry_handler.maps.iter().enumerate() {
             if i == 0 {
                 continue;
-            } // Identity already computed
+            }
 
-            // Transform
             let transformed = self.apply_symmetry(board, map);
             let key = QKey::from(&transformed);
 
@@ -311,10 +285,8 @@ impl QLearner {
     }
 
     fn apply_symmetry(&self, board: &BitBoardState, map: &[usize]) -> BitBoardState {
-        // Reconstruct a new board with bits moved
         let mut new_board = BitBoardState::new(board.dimension);
 
-        // P1
         for i in 0..board.total_cells {
             use crate::infrastructure::persistence::BitBoard;
             let is_p1 = match &board.p1 {
@@ -357,7 +329,6 @@ impl QLearner {
 
 impl PlayerStrategy<BitBoardState> for QLearner {
     fn get_best_move(&mut self, board: &BitBoardState, _player: Player) -> Option<Coordinate> {
-        // Changed return type
         let moves = self.get_available_moves(board);
         if moves.is_empty() {
             return None;
@@ -366,17 +337,13 @@ impl PlayerStrategy<BitBoardState> for QLearner {
             return None;
         }
 
-        // Inference with symmetry
         let (key, map_idx) = self.get_canonical(board);
         let map = &self.symmetry_handler.maps[map_idx];
 
-        // Map moves to canonical
         let canonical_moves: Vec<usize> = moves.iter().map(|&mv| map[mv]).collect();
 
-        // Get best canonical action
         let canonical_action = self.get_best_action(&key, &canonical_moves);
 
-        // Map back
         let action = map.iter().position(|&val| val == canonical_action).unwrap();
 
         Some(Coordinate(action))

@@ -94,8 +94,6 @@ impl<S: BoardState> Board<S> {
     }
 }
 
-/// The Aggregate Root for the TicTacToe Game.
-/// Encapsulates the Board and the current Turn (Player).
 #[derive(Clone, Debug)]
 pub struct Game<S: BoardState> {
     board: Board<S>,
@@ -107,7 +105,7 @@ impl<S: BoardState> Game<S> {
     pub fn new(dimension: usize) -> Self {
         Self {
             board: Board::new(dimension),
-            current_player: Player::X, // X always starts
+            current_player: Player::X,
             status: GameResult::InProgress,
         }
     }
@@ -131,10 +129,8 @@ impl<S: BoardState> Game<S> {
 
         self.board.make_move(coord, self.current_player)?;
 
-        // Update status
         self.status = self.board.check_status();
 
-        // Switch turn if game is still in progress
         if self.status == GameResult::InProgress {
             self.current_player = self.current_player.opponent();
         }

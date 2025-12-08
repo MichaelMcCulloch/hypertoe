@@ -19,13 +19,6 @@ impl Flag {
     }
 }
 
-// Packed atomic entry
-// Word 1: Key (Full u64 hash)
-// Word 2: Data packed as:
-//   - Score: i16 (bits 0-15) - rebased to u16
-//   - Depth: u8  (bits 16-23)
-//   - Flag:  u8  (bits 24-25)
-//   - BestMove: u16 (bits 26-41) (0xFFFF means None)
 #[derive(Default)]
 struct AtomicTranspositionEntry {
     key: AtomicU64,
@@ -39,7 +32,6 @@ pub struct LockFreeTT {
 
 impl LockFreeTT {
     pub fn new(size_mb: usize) -> Self {
-        // Each entry is 16 bytes.
         let num_entries = (size_mb * 1024 * 1024) / 16;
         let size = num_entries.next_power_of_two();
 
@@ -65,9 +57,8 @@ impl LockFreeTT {
 
         let data = entry.data.load(Ordering::Relaxed);
 
-        // Unpack
         let score_u16 = (data & 0xFFFF) as u16;
-        let score = (score_u16 as i32) - 10000; // Offset back
+        let score = (score_u16 as i32) - 10000;
 
         let depth = ((data >> 16) & 0xFF) as u8;
         let flag_u8 = ((data >> 24) & 0x3) as u8;
@@ -86,8 +77,6 @@ impl LockFreeTT {
         let idx = (hash as usize) & self.mask;
         let entry = &self.entries[idx];
 
-        // Pack
-        // Score: -10000 to 10000. Add 10000 to make it u16 compatible (0 to 20000)
         let score_rebased = (score + 10000).clamp(0, 65535) as u64;
         let depth_bits = (depth as u64) << 16;
         let flag_bits = (flag as u64) << 24;
@@ -97,13 +86,6 @@ impl LockFreeTT {
         };
 
         let new_data = score_rebased | depth_bits | flag_bits | move_bits;
-
-        // Simple replacement policy: Always replace if depth is greater or equal
-        // Or if the slot is empty (key mismatch implicitly handled by overwrite)
-
-        // For strict correctness in a race, we might want to check the existing depth,
-        // but for a game engine concurrent access, "racy" overwrite is often acceptable and faster.
-        // We will do a relaxed load to check depth to avoid thrashing valuable deep nodes with shallow ones.
 
         let existing_data = entry.data.load(Ordering::Relaxed);
         let existing_depth = ((existing_data >> 16) & 0xFF) as u8;

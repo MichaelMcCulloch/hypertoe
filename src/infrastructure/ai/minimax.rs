@@ -25,7 +25,7 @@ pub struct MinimaxBot {
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
         MinimaxBot {
-            transposition_table: LockFreeTT::new(256), // 256MB default
+            transposition_table: LockFreeTT::new(256),
             zobrist_keys: Vec::new(),
             symmetries: None,
             max_depth,
@@ -64,16 +64,12 @@ impl MinimaxBot {
         }
     }
 
-    /// Scans the board for immediate wins or forced blocks.
-    /// Returns Some(index) if a move is critical, None if standard search is required.
     fn search_win_threats(&self, board: &mut BitBoardState, player: Player) -> Option<usize> {
         let opponent = player.opponent();
         let mut blocking_move = None;
 
-        // Iterate through all cells to find immediate game-ending moves
         for idx in 0..board.total_cells() {
             if board.get_cell(Coordinate(idx)).is_none() {
-                // 1. Check if WE can win immediately (Priority #1)
                 board.set_cell(Coordinate(idx), player).unwrap();
                 let is_win = match player {
                     Player::X => board.p1.check_win_at(&board.winning_masks, idx),
@@ -85,9 +81,6 @@ impl MinimaxBot {
                     return Some(idx);
                 }
 
-                // 2. Check if OPPONENT can win immediately (Priority #2 - Forced Block)
-                // We only record the first block found. If we found a win above, we take that.
-                // If we haven't found a block yet, check for threat.
                 if blocking_move.is_none() {
                     board.set_cell(Coordinate(idx), opponent).unwrap();
                     let is_loss = match opponent {
@@ -371,12 +364,8 @@ impl MinimaxBot {
 
 impl PlayerStrategy<BitBoardState> for MinimaxBot {
     fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<Coordinate> {
-        // Changed return type
         self.ensure_initialized(board);
 
-        // --- PRE-SEARCH OPTIMIZATION ---
-        // Before starting heavy iterative deepening, check for immediate
-        // wins or immediate threats (moves we MUST block).
         let mut check_board = board.clone();
         if let Some(immediate_move) = self.search_win_threats(&mut check_board, player) {
             println!(
@@ -385,7 +374,6 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
             );
             return Some(Coordinate(immediate_move));
         }
-        // -------------------------------
 
         let mut move_buffer = [0usize; 128];
         let count = self.get_sorted_moves(board, &mut move_buffer);
