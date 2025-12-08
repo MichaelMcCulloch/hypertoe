@@ -1,8 +1,9 @@
 use hypertictactoe::application::game_service::GameService;
-use hypertictactoe::domain::models::Board;
+use hypertictactoe::domain::models::Game;
 use hypertictactoe::domain::services::PlayerStrategy;
 use hypertictactoe::infrastructure::ai::MinimaxBot;
 use hypertictactoe::infrastructure::console::HumanConsolePlayer;
+use hypertictactoe::infrastructure::console_runner::ConsoleRunner;
 use hypertictactoe::infrastructure::persistence::BitBoardState;
 use hypertictactoe::infrastructure::time::SystemClock;
 use std::env;
@@ -127,8 +128,8 @@ fn main() {
 
     let clock = SystemClock::new();
 
-    let board = Board::<BitBoardState>::new(dimension);
+    let game = Game::<BitBoardState>::new(dimension);
 
-    let mut game = GameService::new(board, clock, player_x, player_o);
-    game.start();
+    let game_service = GameService::new(game, clock, player_x, player_o);
+    ConsoleRunner::run(game_service);
 }

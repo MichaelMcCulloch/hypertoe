@@ -1,5 +1,5 @@
 use super::transposition::{Flag, LockFreeTT};
-use crate::domain::models::{BoardState, Player};
+use crate::domain::models::{BoardState, Coordinate, Player};
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::persistence::{BitBoard, BitBoardState, WinningMasks};
 use crate::infrastructure::symmetries::SymmetryHandler;
@@ -72,14 +72,14 @@ impl MinimaxBot {
 
         // Iterate through all cells to find immediate game-ending moves
         for idx in 0..board.total_cells() {
-            if board.get_cell(idx).is_none() {
+            if board.get_cell(Coordinate(idx)).is_none() {
                 // 1. Check if WE can win immediately (Priority #1)
-                board.set_cell(idx, player).unwrap();
+                board.set_cell(Coordinate(idx), player).unwrap();
                 let is_win = match player {
                     Player::X => board.p1.check_win_at(&board.winning_masks, idx),
                     Player::O => board.p2.check_win_at(&board.winning_masks, idx),
                 };
-                board.clear_cell(idx);
+                board.clear_cell(Coordinate(idx));
 
                 if is_win {
                     return Some(idx);
@@ -89,12 +89,12 @@ impl MinimaxBot {
                 // We only record the first block found. If we found a win above, we take that.
                 // If we haven't found a block yet, check for threat.
                 if blocking_move.is_none() {
-                    board.set_cell(idx, opponent).unwrap();
+                    board.set_cell(Coordinate(idx), opponent).unwrap();
                     let is_loss = match opponent {
                         Player::X => board.p1.check_win_at(&board.winning_masks, idx),
                         Player::O => board.p2.check_win_at(&board.winning_masks, idx),
                     };
-                    board.clear_cell(idx);
+                    board.clear_cell(Coordinate(idx));
 
                     if is_loss {
                         blocking_move = Some(idx);
@@ -113,7 +113,7 @@ impl MinimaxBot {
         for (sym_idx, map) in handler.maps.iter().enumerate() {
             let mut h = 0;
             for cell_idx in 0..board.total_cells() {
-                if let Some(p) = board.get_cell(cell_idx) {
+                if let Some(p) = board.get_cell(Coordinate(cell_idx)) {
                     let mapped_cell = map[cell_idx];
                     let p_idx = match p {
                         Player::X => 0,
@@ -150,7 +150,7 @@ impl MinimaxBot {
     fn get_sorted_moves(&self, board: &BitBoardState, buffer: &mut [usize]) -> usize {
         let mut count = 0;
         for idx in 0..board.total_cells() {
-            if board.get_cell(idx).is_none() {
+            if board.get_cell(Coordinate(idx)).is_none() {
                 buffer[count] = idx;
                 count += 1;
             }
@@ -245,7 +245,7 @@ impl MinimaxBot {
         let mut best_move = None;
 
         for &idx in moves.iter() {
-            board.set_cell(idx, current_player).unwrap();
+            board.set_cell(Coordinate(idx), current_player).unwrap();
 
             self.update_hashes(rolling_hashes, idx, current_player, depth);
 
@@ -261,7 +261,7 @@ impl MinimaxBot {
                 self.minimax(board, depth + 1, opponent, alpha, beta, rolling_hashes)
             };
 
-            board.clear_cell(idx);
+            board.clear_cell(Coordinate(idx));
             self.update_hashes(rolling_hashes, idx, current_player, depth);
 
             match current_player {
@@ -370,7 +370,8 @@ impl MinimaxBot {
 }
 
 impl PlayerStrategy<BitBoardState> for MinimaxBot {
-    fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
+    fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<Coordinate> {
+        // Changed return type
         self.ensure_initialized(board);
 
         // --- PRE-SEARCH OPTIMIZATION ---
@@ -382,7 +383,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                 "Bot found immediate strategic move (Win/Block): {}",
                 immediate_move
             );
-            return Some(immediate_move);
+            return Some(Coordinate(immediate_move));
         }
         // -------------------------------
 
@@ -394,7 +395,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         }
 
         if available_moves.len() == 1 {
-            return Some(available_moves[0]);
+            return Some(Coordinate(available_moves[0]));
         }
 
         let original_max_depth = self.max_depth;
@@ -415,7 +416,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                     let mut work_board = board.clone();
                     let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
 
-                    work_board.set_cell(mv, player).unwrap();
+                    work_board.set_cell(Coordinate(mv), player).unwrap();
                     self.update_hashes(&mut rolling_hashes, mv, player, 0);
 
                     let score = self.minimax(
@@ -447,7 +448,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
 
         self.max_depth = original_max_depth;
 
-        current_best_move_entry.map(|(mv, _)| mv)
+        current_best_move_entry.map(|(mv, _)| Coordinate(mv))
     }
 }
 
@@ -469,13 +470,13 @@ mod tests {
     #[test]
     fn test_minimax_blocks_win() {
         let mut board = BitBoardState::new(2);
-        board.set_cell(0, Player::X).unwrap();
-        board.set_cell(3, Player::O).unwrap();
-        board.set_cell(4, Player::O).unwrap();
+        board.set_cell(Coordinate(0), Player::X).unwrap();
+        board.set_cell(Coordinate(3), Player::O).unwrap();
+        board.set_cell(Coordinate(4), Player::O).unwrap();
 
         let mut bot = MinimaxBot::new(5);
         let best_move = bot.get_best_move(&board, Player::X);
 
-        assert_eq!(best_move, Some(5));
+        assert_eq!(best_move, Some(Coordinate(5)));
     }
 }

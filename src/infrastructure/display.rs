@@ -1,10 +1,10 @@
-use crate::domain::models::{BoardState, Player};
+use crate::domain::models::{BoardState, Coordinate, Player};
 use std::fmt;
 
 const COLOR_RESET: &str = "\x1b[0m";
-const COLOR_X: &str = "\x1b[31m"; 
-const COLOR_O: &str = "\x1b[36m"; 
-const COLOR_DIM: &str = "\x1b[90m"; 
+const COLOR_X: &str = "\x1b[31m";
+const COLOR_O: &str = "\x1b[36m";
+const COLOR_DIM: &str = "\x1b[90m";
 
 struct Canvas {
     width: usize,
@@ -87,7 +87,7 @@ fn draw_recursive<S: BoardState>(
         for dy in 0..3 {
             for dx in 0..3 {
                 let cell_idx = base_index + dx + dy * side;
-                let s = match board.get_cell(cell_idx) {
+                let s = match board.get_cell(Coordinate(cell_idx)) {
                     Some(Player::X) => format!("{}X{}", COLOR_X, COLOR_RESET),
                     Some(Player::O) => format!("{}O{}", COLOR_O, COLOR_RESET),
                     None => format!("{}.{}", COLOR_DIM, COLOR_RESET),

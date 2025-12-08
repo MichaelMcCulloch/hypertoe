@@ -1,8 +1,8 @@
+use crate::domain::models::{BoardState, Coordinate, Player};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::fmt;
 use std::sync::Arc;
-use crate::domain::models::{BoardState, Player};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
@@ -69,7 +69,8 @@ impl BoardState for BitBoardState {
         self.total_cells
     }
 
-    fn get_cell(&self, index: usize) -> Option<Player> {
+    fn get_cell(&self, coord: Coordinate) -> Option<Player> {
+        let index = coord.index();
         if self.p1.get_bit(index) {
             Some(Player::X)
         } else if self.p2.get_bit(index) {
@@ -79,7 +80,8 @@ impl BoardState for BitBoardState {
         }
     }
 
-    fn set_cell(&mut self, index: usize, player: Player) -> Result<(), String> {
+    fn set_cell(&mut self, coord: Coordinate, player: Player) -> Result<(), String> {
+        let index = coord.index();
         if index >= self.total_cells {
             return Err("Index out of bounds".to_string());
         }
@@ -94,7 +96,8 @@ impl BoardState for BitBoardState {
         Ok(())
     }
 
-    fn clear_cell(&mut self, index: usize) {
+    fn clear_cell(&mut self, coord: Coordinate) {
+        let index = coord.index();
         self.p1.clear_bit(index);
         self.p2.clear_bit(index);
     }
@@ -120,8 +123,6 @@ impl fmt::Display for BitBoardState {
         write!(f, "{}", crate::infrastructure::display::render_board(self))
     }
 }
-
-
 
 impl BitBoard {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
@@ -264,8 +265,6 @@ impl BitBoard {
         }
     }
 }
-
-
 
 fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
     let lines_indices = generate_winning_lines_indices(dimension, side);
@@ -432,8 +431,6 @@ fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
     Some(index)
 }
 
-
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
@@ -549,7 +546,7 @@ unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::models::{BoardState, Player};
+    use crate::domain::models::{BoardState, Coordinate, Player};
 
     #[test]
     fn test_2d_lines_count() {
@@ -581,27 +578,27 @@ mod tests {
     #[test]
     fn test_win_detection() {
         let mut board = BitBoardState::new(2);
-        board.set_cell(0, Player::X).unwrap();
-        board.set_cell(1, Player::X).unwrap();
-        board.set_cell(2, Player::X).unwrap();
+        board.set_cell(Coordinate(0), Player::X).unwrap();
+        board.set_cell(Coordinate(1), Player::X).unwrap();
+        board.set_cell(Coordinate(2), Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
 
     #[test]
     fn test_diagonal_win_20_11_02() {
         let mut board = BitBoardState::new(2);
-        board.set_cell(2, Player::X).unwrap();
-        board.set_cell(4, Player::X).unwrap();
-        board.set_cell(6, Player::X).unwrap();
+        board.set_cell(Coordinate(2), Player::X).unwrap();
+        board.set_cell(Coordinate(4), Player::X).unwrap();
+        board.set_cell(Coordinate(6), Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
 
     #[test]
     fn test_reproduce_check_win_through_center() {
         let mut board = BitBoardState::new(3);
-        board.set_cell(4, Player::X).unwrap();
-        board.set_cell(13, Player::X).unwrap();
-        board.set_cell(22, Player::X).unwrap();
+        board.set_cell(Coordinate(4), Player::X).unwrap();
+        board.set_cell(Coordinate(13), Player::X).unwrap();
+        board.set_cell(Coordinate(22), Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
 }

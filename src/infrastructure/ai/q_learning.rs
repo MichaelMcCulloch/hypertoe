@@ -1,4 +1,4 @@
-use crate::domain::models::{BoardState, Player};
+use crate::domain::models::{BoardState, Coordinate, Player};
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::persistence::BitBoardState;
 use crate::infrastructure::symmetries::SymmetryHandler;
@@ -162,7 +162,10 @@ impl QLearner {
                         let action = map.iter().position(|&val| val == canonical_action).unwrap();
 
                         let mut next_board = board.clone();
-                        if next_board.set_cell(action, current_player).is_ok() {
+                        if next_board
+                            .set_cell(Coordinate(action), current_player)
+                            .is_ok()
+                        {
                             let reward = self.calculate_reward(&next_board, current_player);
 
                             // For next state, we just need its value
@@ -229,7 +232,7 @@ impl QLearner {
     fn get_available_moves(&self, board: &BitBoardState) -> Vec<usize> {
         let mut moves = Vec::new();
         for i in 0..board.total_cells() {
-            if board.get_cell(i).is_none() {
+            if board.get_cell(Coordinate(i)).is_none() {
                 moves.push(i);
             }
         }
@@ -328,7 +331,7 @@ impl QLearner {
             };
             if is_p1 {
                 let dest = map[i];
-                let _ = new_board.set_cell(dest, Player::X);
+                let _ = new_board.set_cell(Coordinate(dest), Player::X);
             }
 
             let is_p2 = match &board.p2 {
@@ -345,7 +348,7 @@ impl QLearner {
             };
             if is_p2 {
                 let dest = map[i];
-                let _ = new_board.set_cell(dest, Player::O);
+                let _ = new_board.set_cell(Coordinate(dest), Player::O);
             }
         }
         new_board
@@ -353,7 +356,8 @@ impl QLearner {
 }
 
 impl PlayerStrategy<BitBoardState> for QLearner {
-    fn get_best_move(&mut self, board: &BitBoardState, _player: Player) -> Option<usize> {
+    fn get_best_move(&mut self, board: &BitBoardState, _player: Player) -> Option<Coordinate> {
+        // Changed return type
         let moves = self.get_available_moves(board);
         if moves.is_empty() {
             return None;
@@ -375,6 +379,6 @@ impl PlayerStrategy<BitBoardState> for QLearner {
         // Map back
         let action = map.iter().position(|&val| val == canonical_action).unwrap();
 
-        Some(action)
+        Some(Coordinate(action))
     }
 }

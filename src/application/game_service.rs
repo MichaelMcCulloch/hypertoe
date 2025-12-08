@@ -1,69 +1,56 @@
-use crate::domain::models::{Board, BoardState, Player, GameResult};
+use crate::domain::models::{BoardState, Game, GameResult, Player};
 use crate::domain::services::{Clock, PlayerStrategy};
 use std::fmt::Display;
+use std::time::Duration;
 
 pub struct GameService<'a, S: BoardState, C: Clock> {
-    board: Board<S>,
+    game: Game<S>,
     clock: C,
-    player_x: Box<dyn PlayerStrategy<S> + 'a>, 
+    player_x: Box<dyn PlayerStrategy<S> + 'a>,
     player_o: Box<dyn PlayerStrategy<S> + 'a>,
-    turn: Player,
 }
 
 impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
     pub fn new(
-        board: Board<S>,
+        game: Game<S>,
         clock: C,
         player_x: Box<dyn PlayerStrategy<S> + 'a>,
         player_o: Box<dyn PlayerStrategy<S> + 'a>,
     ) -> Self {
         GameService {
-            board,
+            game,
             clock,
             player_x,
             player_o,
-            turn: Player::X,
         }
     }
 
-    pub fn start(&mut self) {
-        println!("Starting Game...");
-        println!("{}", self.board.state()); 
+    pub fn board_state(&self) -> &S {
+        self.game.board().state()
+    }
 
-        loop {
-            match self.board.check_status() {
-                GameResult::Win(p) => {
-                    println!("Player {:?} Wins!", p);
-                    break;
-                }
-                GameResult::Draw => {
-                    println!("It's a Draw!");
-                    break;
-                }
-                GameResult::InProgress => {}
-            }
+    pub fn check_status(&self) -> GameResult {
+        self.game.status()
+    }
 
-            let start_time = self.clock.now();
-            println!("Player {:?}'s turn (Time: {:?})", self.turn, start_time);
+    pub fn current_turn_info(&self) -> (Player, Duration) {
+        (self.game.current_player(), self.clock.now())
+    }
 
-            let strategy = match self.turn {
-                Player::X => &mut self.player_x,
-                Player::O => &mut self.player_o,
-            };
+    pub fn play_next_turn(&mut self) -> Result<GameResult, String> {
+        let current_player = self.game.current_player();
 
-            
-            if let Some(move_idx) = strategy.get_best_move(self.board.state(), self.turn) {
-                 match self.board.make_move(move_idx, self.turn) {
-                     Ok(_) => {
-                         println!("{}", self.board.state()); 
-                         self.turn = self.turn.opponent();
-                     }
-                     Err(e) => println!("Error making move: {}", e),
-                 }
-            } else {
-                println!("No moves available? Check logic.");
-                break;
-            }
+        let strategy = match current_player {
+            Player::X => &mut self.player_x,
+            Player::O => &mut self.player_o,
+        };
+
+        // We pass the board state to the strategy.
+        // Strategy returns a Coordinate.
+        if let Some(coord) = strategy.get_best_move(self.game.board().state(), current_player) {
+            self.game.play_turn(coord)
+        } else {
+            Err("Strategy returned no move".to_string())
         }
     }
 }
