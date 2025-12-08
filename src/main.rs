@@ -1,12 +1,18 @@
-use hypertictactoe::game::{Game, PlayerType};
+use hypertictactoe::application::game_service::GameService;
+use hypertictactoe::domain::models::{Board, BoardState, Player};
+use hypertictactoe::domain::services::PlayerStrategy;
+use hypertictactoe::infrastructure::console::HumanConsolePlayer;
+use hypertictactoe::infrastructure::ai::MinimaxBot;
+use hypertictactoe::infrastructure::persistence::BitBoardState;
+use hypertictactoe::infrastructure::time::SystemClock;
 use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut dimension = 3;
-    let mut player_x = PlayerType::Human;
-    let mut player_o = PlayerType::CPU;
+    let mut player_x_type = "h";
+    let mut player_o_type = "c"; 
     let mut depth = usize::MAX; 
 
     if args.len() > 1 {
@@ -15,24 +21,10 @@ fn main() {
         }
     }
     if args.len() > 2 {
-        match args[2].as_str() {
-            "hh" => {
-                player_x = PlayerType::Human;
-                player_o = PlayerType::Human;
-            }
-            "hc" => {
-                player_x = PlayerType::Human;
-                player_o = PlayerType::CPU;
-            }
-            "ch" => {
-                player_x = PlayerType::CPU;
-                player_o = PlayerType::Human;
-            }
-            "cc" => {
-                player_x = PlayerType::CPU;
-                player_o = PlayerType::CPU;
-            }
-            _ => println!("Unknown mode, defaulting to Human vs CPU"),
+        let mode = args[2].as_str();
+        if mode.len() >= 2 {
+            player_x_type = &mode[0..1];
+            player_o_type = &mode[1..2];
         }
     }
     if args.len() > 3 {
@@ -41,6 +33,26 @@ fn main() {
         }
     }
 
-    let mut game = Game::new(dimension, player_x, player_o, depth);
+    let board_state = BitBoardState::new(dimension);
+    
+    let player_x: Box<dyn PlayerStrategy<BitBoardState>> = match player_x_type {
+        "h" => Box::new(HumanConsolePlayer::new()),
+        "c" => Box::new(MinimaxBot::new(depth)),
+         _  => Box::new(HumanConsolePlayer::new()),
+    };
+
+    let player_o: Box<dyn PlayerStrategy<BitBoardState>> = match player_o_type {
+        "h" => Box::new(HumanConsolePlayer::new()),
+        "c" => Box::new(MinimaxBot::new(depth)),
+         _  => Box::new(MinimaxBot::new(depth)),
+    };
+
+    let clock = SystemClock::new();
+
+    // Board generic param inference?
+    // We need to explicitly type the Board or let it infer from GameService.
+    let board = Board::<BitBoardState>::new(dimension);
+
+    let mut game = GameService::new(board, clock, player_x, player_o);
     game.start();
 }

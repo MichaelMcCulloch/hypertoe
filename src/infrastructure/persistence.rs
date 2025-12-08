@@ -1,0 +1,600 @@
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+use std::fmt;
+use crate::domain::models::{BoardState, Player};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BitBoard {
+    Small(u32),
+    Medium(u128),
+    Large(Vec<u64>),
+}
+
+#[derive(Clone, Debug)]
+pub enum WinningMasks {
+    Small {
+        masks: Vec<u32>,
+        map: Vec<Vec<usize>>,
+    },
+    Medium {
+        masks: Vec<u128>,
+        map: Vec<Vec<usize>>,
+    },
+    Large {
+        masks: Vec<Vec<u64>>,
+        map: Vec<Vec<usize>>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct BitBoardState {
+    pub dimension: usize,
+    pub side: usize,
+    pub total_cells: usize,
+    pub p1: BitBoard,
+    pub p2: BitBoard,
+    pub winning_masks: WinningMasks,
+}
+
+impl BoardState for BitBoardState {
+    fn new(dimension: usize) -> Self {
+        let side: usize = 3;
+        let total_cells = side.pow(dimension as u32);
+
+        let p1 = BitBoard::new_empty(dimension, side);
+        let p2 = BitBoard::new_empty(dimension, side);
+
+        let winning_masks = generate_winning_masks(dimension, side);
+
+        BitBoardState {
+            dimension,
+            side,
+            total_cells,
+            p1,
+            p2,
+            winning_masks,
+        }
+    }
+
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    fn side(&self) -> usize {
+        self.side
+    }
+
+    fn total_cells(&self) -> usize {
+        self.total_cells
+    }
+
+    fn get_cell(&self, index: usize) -> Option<Player> {
+        if self.p1.get_bit(index) {
+            Some(Player::X)
+        } else if self.p2.get_bit(index) {
+            Some(Player::O)
+        } else {
+            None
+        }
+    }
+
+    fn set_cell(&mut self, index: usize, player: Player) -> Result<(), String> {
+        if index >= self.total_cells {
+            return Err("Index out of bounds".to_string());
+        }
+        if self.p1.get_bit(index) || self.p2.get_bit(index) {
+            return Err("Cell already occupied".to_string());
+        }
+
+        match player {
+            Player::X => self.p1.set_bit(index),
+            Player::O => self.p2.set_bit(index),
+        }
+        Ok(())
+    }
+
+    fn clear_cell(&mut self, index: usize) {
+        self.p1.clear_bit(index);
+        self.p2.clear_bit(index);
+    }
+
+    fn check_win(&self) -> Option<Player> {
+        if self.p1.check_win(&self.winning_masks) {
+            return Some(Player::X);
+        }
+        if self.p2.check_win(&self.winning_masks) {
+            return Some(Player::O);
+        }
+        None
+    }
+
+    fn is_full(&self) -> bool {
+        let combined = self.p1.or_with(&self.p2);
+        combined.is_full(self.total_cells)
+    }
+}
+
+impl fmt::Display for BitBoardState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", crate::infrastructure::display::render_board(self))
+    }
+}
+
+// --- BitBoard Implementation ---
+
+impl BitBoard {
+    pub fn new_empty(dimension: usize, side: usize) -> Self {
+        let total_cells = side.pow(dimension as u32);
+        if total_cells <= 32 {
+            BitBoard::Small(0)
+        } else if total_cells <= 128 {
+            BitBoard::Medium(0)
+        } else {
+            let num_u64s = (total_cells + 63) / 64;
+            BitBoard::Large(vec![0; num_u64s])
+        }
+    }
+
+    pub fn set_bit(&mut self, index: usize) {
+        match self {
+            BitBoard::Small(b) => *b |= 1 << index,
+            BitBoard::Medium(b) => *b |= 1 << index,
+            BitBoard::Large(v) => {
+                let vec_idx = index / 64;
+                if vec_idx < v.len() {
+                    v[vec_idx] |= 1 << (index % 64);
+                }
+            }
+        }
+    }
+
+    pub fn clear_bit(&mut self, index: usize) {
+        match self {
+            BitBoard::Small(b) => *b &= !(1 << index),
+            BitBoard::Medium(b) => *b &= !(1 << index),
+            BitBoard::Large(v) => {
+                let vec_idx = index / 64;
+                if vec_idx < v.len() {
+                    v[vec_idx] &= !(1 << (index % 64));
+                }
+            }
+        }
+    }
+
+    pub fn get_bit(&self, index: usize) -> bool {
+        match self {
+            BitBoard::Small(b) => (*b & (1 << index)) != 0,
+            BitBoard::Medium(b) => (*b & (1 << index)) != 0,
+            BitBoard::Large(v) => {
+                let vec_idx = index / 64;
+                if let Some(chunk) = v.get(vec_idx) {
+                    (*chunk & (1 << (index % 64))) != 0
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub fn count_ones(&self) -> u32 {
+        match self {
+            BitBoard::Small(b) => b.count_ones(),
+            BitBoard::Medium(b) => b.count_ones(),
+            BitBoard::Large(v) => v.iter().map(|chunk| chunk.count_ones()).sum(),
+        }
+    }
+
+    pub fn or_with(&self, other: &BitBoard) -> BitBoard {
+        match (self, other) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
+            (BitBoard::Large(a), BitBoard::Large(b)) => {
+                BitBoard::Large(a.iter().zip(b.iter()).map(|(x, y)| x | y).collect())
+            }
+            _ => self.clone(),
+        }
+    }
+
+    pub fn is_full(&self, total_cells: usize) -> bool {
+        self.count_ones() as usize >= total_cells
+    }
+
+    pub fn check_win(&self, winning_masks: &WinningMasks) -> bool {
+        match (self, winning_masks) {
+            (BitBoard::Small(board), WinningMasks::Small { masks, .. }) => unsafe {
+                check_win_u32_opt(*board, masks)
+            },
+            (BitBoard::Medium(board), WinningMasks::Medium { masks, .. }) => unsafe {
+                check_win_u128_opt(*board, masks)
+            },
+            (BitBoard::Large(board), WinningMasks::Large { masks, .. }) => {
+                masks.iter().any(|mask_chunks| {
+                    board.len() == mask_chunks.len()
+                        && board
+                            .iter()
+                            .zip(mask_chunks.iter())
+                            .all(|(b, m)| (*b & *m) == *m)
+                })
+            }
+            _ => false,
+        }
+    }
+
+    pub fn check_win_at(&self, winning_masks: &WinningMasks, index: usize) -> bool {
+        match (self, winning_masks) {
+            (BitBoard::Small(board), WinningMasks::Small { masks, map }) => {
+                if let Some(indices) = map.get(index) {
+                    for &i in indices {
+                        let m = masks[i];
+                        if (board & m) == m {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            (BitBoard::Medium(board), WinningMasks::Medium { masks, map }) => {
+                if let Some(indices) = map.get(index) {
+                    for &i in indices {
+                        let m = masks[i];
+                        if (board & m) == m {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            (BitBoard::Large(board), WinningMasks::Large { masks, map }) => {
+                if let Some(indices) = map.get(index) {
+                    for &i in indices {
+                        let mask_chunks = &masks[i];
+                        if board
+                            .iter()
+                            .zip(mask_chunks.iter())
+                            .all(|(b, m)| (*b & *m) == *m)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+}
+
+// --- Mask Generation Logic ---
+
+fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
+    let lines_indices = generate_winning_lines_indices(dimension, side);
+    let total_cells = side.pow(dimension as u32);
+
+    let mut map: Vec<Vec<usize>> = vec![vec![]; total_cells];
+
+    for (line_idx, line) in lines_indices.iter().enumerate() {
+        for &cell_idx in line {
+            map[cell_idx].push(line_idx);
+        }
+    }
+
+    if total_cells <= 32 {
+        let mut masks = Vec::new();
+        for line in lines_indices {
+            let mut mask: u32 = 0;
+            for idx in line {
+                mask |= 1 << idx;
+            }
+            masks.push(mask);
+        }
+        WinningMasks::Small { masks, map }
+    } else if total_cells <= 128 {
+        let mut masks = Vec::new();
+        for line in lines_indices {
+            let mut mask: u128 = 0;
+            for idx in line {
+                mask |= 1 << idx;
+            }
+            masks.push(mask);
+        }
+        WinningMasks::Medium { masks, map }
+    } else {
+        let mut masks = Vec::new();
+        let num_u64s = (total_cells + 63) / 64;
+        for line in lines_indices {
+            let mut mask_chunks = vec![0u64; num_u64s];
+            for idx in line {
+                let vec_idx = idx / 64;
+                mask_chunks[vec_idx] |= 1 << (idx % 64);
+            }
+            masks.push(mask_chunks);
+        }
+        WinningMasks::Large { masks, map }
+    }
+}
+
+fn generate_winning_lines_indices(dimension: usize, side: usize) -> Vec<Vec<usize>> {
+    let mut lines = Vec::new();
+    let all_directions = get_canonical_directions(dimension);
+
+    for dir in all_directions {
+        let valid_starts = get_valid_starts(dimension, side, &dir);
+        for start in valid_starts {
+            let mut line = Vec::new();
+            let mut current = start.clone();
+            let mut valid = true;
+
+            for _ in 0..side {
+                if let Some(idx) = coords_to_index(&current, side) {
+                    line.push(idx);
+
+                    for (i, d) in dir.iter().enumerate() {
+                        let next_val = current[i] as isize + d;
+                        current[i] = next_val as usize;
+                    }
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+
+            if valid && line.len() == side {
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
+
+fn get_canonical_directions(dimension: usize) -> Vec<Vec<isize>> {
+    let mut dirs = Vec::new();
+    let num_dirs = 3_usize.pow(dimension as u32);
+
+    for i in 0..num_dirs {
+        let mut dir = Vec::new();
+        let mut temp = i;
+        let mut has_nonzero = false;
+        let mut first_nonzero_is_positive = false;
+        for _ in 0..dimension {
+            let digit = temp % 3;
+            temp /= 3;
+            let val = match digit {
+                0 => 0,
+                1 => 1,
+                2 => -1,
+                _ => unreachable!(),
+            };
+            dir.push(val);
+        }
+
+        for &val in &dir {
+            if val != 0 {
+                has_nonzero = true;
+                if val > 0 {
+                    first_nonzero_is_positive = true;
+                }
+                break;
+            }
+        }
+
+        if has_nonzero && first_nonzero_is_positive {
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
+fn get_valid_starts(dimension: usize, side: usize, dir: &[isize]) -> Vec<Vec<usize>> {
+    let num_cells = side.pow(dimension as u32);
+    let mut starts = Vec::new();
+
+    for i in 0..num_cells {
+        let coords = index_to_coords(i, dimension, side);
+        let end_coords = coords.clone();
+        let mut possible = true;
+        for (c_idx, &d) in dir.iter().enumerate() {
+            let start_val = end_coords[c_idx] as isize;
+            let end_val = start_val + d * (side as isize - 1);
+
+            if end_val < 0 || end_val >= side as isize {
+                possible = false;
+                break;
+            }
+        }
+        if possible {
+            starts.push(coords);
+        }
+    }
+    starts
+}
+
+fn index_to_coords(index: usize, dimension: usize, side: usize) -> Vec<usize> {
+    let mut coords = vec![0; dimension];
+    let mut temp = index;
+    for i in 0..dimension {
+        coords[i] = temp % side;
+        temp /= side;
+    }
+    coords
+}
+
+fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
+    let mut index = 0;
+    let mut multiplier = 1;
+    for &c in coords {
+        if c >= side {
+            return None;
+        }
+        index += c * multiplier;
+        multiplier *= side;
+    }
+    Some(index)
+}
+
+// --- Intrinsics ---
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline]
+unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
+    let board_vec = _mm256_set1_epi32(board as i32);
+    let chunks = masks.chunks_exact(8);
+    let remainder = chunks.remainder();
+
+    for chunk in chunks {
+        let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
+        let and_res = _mm256_and_si256(board_vec, mask_vec);
+        let cmp = _mm256_cmpeq_epi32(and_res, mask_vec);
+        if _mm256_movemask_epi8(cmp) != 0 {
+            return true;
+        }
+    }
+
+    for &m in remainder {
+        if (board & m) == m {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "sse2",
+    not(target_feature = "avx2")
+))]
+#[inline]
+unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
+    unsafe {
+        let board_vec = _mm_set1_epi32(board as i32);
+        let chunks = masks.chunks_exact(4);
+        let remainder = chunks.remainder();
+
+        for chunk in chunks {
+            let mask_vec = _mm_loadu_si128(chunk.as_ptr() as *const __m128i);
+            let and_res = _mm_and_si128(board_vec, mask_vec);
+            let cmp = _mm_cmpeq_epi32(and_res, mask_vec);
+
+            if _mm_movemask_epi8(cmp) != 0 {
+                return true;
+            }
+        }
+
+        for &m in remainder {
+            if (board & m) == m {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+#[cfg(not(any(target_feature = "avx2", target_feature = "sse2")))]
+#[inline]
+unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
+    masks.iter().any(|&m| (board & m) == m)
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+#[inline]
+unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
+    let board_low = board as u64;
+    let board_high = (board >> 64) as u64;
+
+    let board_vec = _mm256_set_epi64x(
+        board_high as i64,
+        board_low as i64,
+        board_high as i64,
+        board_low as i64,
+    );
+
+    let chunks = masks.chunks_exact(2);
+    let remainder = chunks.remainder();
+
+    for chunk in chunks {
+        let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
+        let and_res = _mm256_and_si256(board_vec, mask_vec);
+        let cmp = _mm256_cmpeq_epi64(and_res, mask_vec);
+
+        let mask_bits = _mm256_movemask_epi8(cmp);
+
+        if (mask_bits & 0xFFFF) == 0xFFFF {
+            return true;
+        }
+        if (mask_bits as u32 & 0xFFFF0000) == 0xFFFF0000 {
+            return true;
+        }
+    }
+
+    for &m in remainder {
+        if (board & m) == m {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+#[inline]
+unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
+    masks.iter().any(|&m| (board & m) == m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::models::{BoardState, Player};
+
+    #[test]
+    fn test_2d_lines_count() {
+        let board = BitBoardState::new(2);
+        match board.winning_masks {
+            WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 8),
+            _ => panic!("Wrong mask type"),
+        }
+    }
+
+    #[test]
+    fn test_3d_lines_count() {
+        let board = BitBoardState::new(3);
+        match board.winning_masks {
+            WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 49),
+            _ => panic!("Wrong mask type"),
+        }
+    }
+
+    #[test]
+    fn test_4d_lines_count() {
+        let board = BitBoardState::new(4);
+        match board.winning_masks {
+            WinningMasks::Medium { masks, .. } => assert_eq!(masks.len(), 272),
+            _ => panic!("Wrong mask type"),
+        }
+    }
+
+    #[test]
+    fn test_win_detection() {
+        let mut board = BitBoardState::new(2);
+        board.set_cell(0, Player::X).unwrap();
+        board.set_cell(1, Player::X).unwrap();
+        board.set_cell(2, Player::X).unwrap();
+        assert_eq!(board.check_win(), Some(Player::X));
+    }
+
+    #[test]
+    fn test_diagonal_win_20_11_02() {
+        let mut board = BitBoardState::new(2);
+        board.set_cell(2, Player::X).unwrap();
+        board.set_cell(4, Player::X).unwrap();
+        board.set_cell(6, Player::X).unwrap();
+        assert_eq!(board.check_win(), Some(Player::X));
+    }
+
+    #[test]
+    fn test_reproduce_check_win_through_center() {
+        let mut board = BitBoardState::new(3);
+        board.set_cell(4, Player::X).unwrap();
+        board.set_cell(13, Player::X).unwrap();
+        board.set_cell(22, Player::X).unwrap();
+        assert_eq!(board.check_win(), Some(Player::X));
+    }
+}
