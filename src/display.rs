@@ -2,9 +2,9 @@ use crate::{HyperBoard, Player};
 use std::fmt;
 
 const COLOR_RESET: &str = "\x1b[0m";
-const COLOR_X: &str = "\x1b[31m"; // Red
-const COLOR_O: &str = "\x1b[36m"; // Cyan
-const COLOR_DIM: &str = "\x1b[90m"; // Dark Gray
+const COLOR_X: &str = "\x1b[31m"; 
+const COLOR_O: &str = "\x1b[36m"; 
+const COLOR_DIM: &str = "\x1b[90m"; 
 
 struct Canvas {
     width: usize,
@@ -41,11 +41,11 @@ impl fmt::Display for Canvas {
 }
 
 pub fn render_board(board: &HyperBoard) -> String {
-    // Determine size
+    
     let (w, h) = calculate_size(board.dimension);
     let mut canvas = Canvas::new(w, h);
 
-    // Recursive draw
+    
     draw_recursive(board, board.dimension, &mut canvas, 0, 0, 0);
 
     canvas.to_string()
@@ -60,19 +60,19 @@ fn calculate_size(dim: usize) -> (usize, usize) {
     }
 
     if dim == 2 {
-        // 2D: X X X
-        // 5 width, 3 height
+        
+        
         return (5, 3);
     }
 
     let (child_w, child_h) = calculate_size(dim - 1);
 
     if dim % 2 != 0 {
-        // Horizontal
+        
         let gap = 2;
         (child_w * 3 + gap * 2, child_h)
     } else {
-        // Vertical
+        
         let gap = 1;
         (child_w, child_h * 3 + gap * 2)
     }
@@ -107,7 +107,7 @@ fn draw_recursive(
     let stride = side.pow((current_dim - 1) as u32);
 
     if current_dim % 2 != 0 {
-        // Horizontal arrangement
+        
         let gap = 2;
         for i in 0..3 {
             let next_x = x + i * (child_w + gap);
@@ -123,7 +123,7 @@ fn draw_recursive(
             }
         }
     } else {
-        // Vertical arrangement
+        
         let gap = 1;
         for i in 0..3 {
             let next_x = x;

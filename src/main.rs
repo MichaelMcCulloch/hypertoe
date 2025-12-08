@@ -4,15 +4,11 @@ use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Default config
     let mut dimension = 3;
     let mut player_x = PlayerType::Human;
     let mut player_o = PlayerType::CPU;
-    let mut depth = usize::MAX; // Infinite by default
+    let mut depth = usize::MAX; 
 
-    // Simple arg parsing
-    // Usage: cargo run -- [dim] [mode] [depth]
-    // mode: hh, hc, ch, cc
     if args.len() > 1 {
         if let Ok(d) = args[1].parse::<usize>() {
             dimension = d;

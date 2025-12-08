@@ -1,6 +1,4 @@
-// src/symmetries.rs
 pub struct SymmetryHandler {
-    // maps[symmetry_index][original_cell_index] -> transformed_cell_index
     pub maps: Vec<Vec<usize>>,
 }
 
@@ -9,12 +7,9 @@ impl SymmetryHandler {
         let total_cells = side.pow(dimension as u32);
         let mut maps = Vec::new();
 
-        // 1. Generate all Permutations of axes (factorial complexity)
         let mut axes: Vec<usize> = (0..dimension).collect();
         let permutations = permute(&mut axes);
 
-        // 2. Generate all Reflections (2^n complexity)
-        // A bitmask where the ith bit being set means "flip the ith axis"
         let num_reflections = 1 << dimension;
 
         for perm in &permutations {
@@ -22,23 +17,19 @@ impl SymmetryHandler {
                 let mut map = vec![0; total_cells];
 
                 for i in 0..total_cells {
-                    // Turn index into coordinates (e.g., x,y,z)
                     let coords = index_to_coords(i, dimension, side);
 
-                    // Apply Permutation: swap axes (e.g., x,y,z -> z,x,y)
                     let mut new_coords = vec![0; dimension];
                     for (dest_axis, &src_axis) in perm.iter().enumerate() {
                         new_coords[dest_axis] = coords[src_axis];
                     }
 
-                    // Apply Reflection: flip axes (e.g., x -> side - 1 - x)
                     for (axis, val) in new_coords.iter_mut().enumerate() {
                         if (ref_mask >> axis) & 1 == 1 {
                             *val = side - 1 - *val;
                         }
                     }
 
-                    // Turn coordinates back into a flat index
                     map[i] = coords_to_index(&new_coords, side);
                 }
                 maps.push(map);
@@ -49,15 +40,12 @@ impl SymmetryHandler {
     }
 }
 
-// --- Helper Functions ---
-
 fn permute(arr: &mut [usize]) -> Vec<Vec<usize>> {
     let mut res = Vec::new();
     heap_permute(arr.len(), arr, &mut res);
     res
 }
 
-// Heap's algorithm for generating permutations
 fn heap_permute(k: usize, arr: &mut [usize], res: &mut Vec<Vec<usize>>) {
     if k == 1 {
         res.push(arr.to_vec());

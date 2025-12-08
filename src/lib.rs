@@ -5,7 +5,7 @@ mod display;
 pub mod game;
 pub mod symmetries;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] // Added Hash
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Player {
     X,
     O,
@@ -78,7 +78,7 @@ impl HyperBoard {
         let lines_indices = Self::generate_winning_lines_indices(dimension, side);
         let total_cells = side.pow(dimension as u32);
 
-        // Helper to build the map: for every cell, which line indices involve it?
+        
         let mut map: Vec<Vec<usize>> = vec![vec![]; total_cells];
 
         for (line_idx, line) in lines_indices.iter().enumerate() {
@@ -137,10 +137,10 @@ impl HyperBoard {
                     if let Some(idx) = Self::coords_to_index(&current, side) {
                         line.push(idx);
 
-                        // Move to next
+                        
                         for (i, d) in dir.iter().enumerate() {
                             let next_val = current[i] as isize + d;
-                            current[i] = next_val as usize; // Assumes valid start makes this safe-ish
+                            current[i] = next_val as usize; 
                         }
                     } else {
                         valid = false;
@@ -177,7 +177,7 @@ impl HyperBoard {
                 dir.push(val);
             }
 
-            // Re-check canonical property on the generated vector
+            
             for &val in &dir {
                 if val != 0 {
                     has_nonzero = true;
@@ -201,7 +201,7 @@ impl HyperBoard {
 
         for i in 0..num_cells {
             let coords = Self::index_to_coords(i, dimension, side);
-            // Check if end point is valid
+            
             let end_coords = coords.clone();
             let mut possible = true;
             for (c_idx, &d) in dir.iter().enumerate() {
@@ -258,9 +258,9 @@ impl HyperBoard {
         Ok(())
     }
 
-    // New optimized version
+    
     pub fn check_win_at(&self, index: usize) -> Option<Player> {
-        // Only check lines passing through 'index'
+        
         if self.p1.check_win_at(&self.winning_masks, index) {
             return Some(Player::X);
         }
@@ -270,7 +270,7 @@ impl HyperBoard {
         None
     }
 
-    // Existing global check
+    
     pub fn check_win(&self) -> Option<Player> {
         if self.p1.check_win(&self.winning_masks) {
             return Some(Player::X);
@@ -282,7 +282,7 @@ impl HyperBoard {
     }
 
     pub fn check_draw(&self) -> bool {
-        // Use popcount: O(1) instead of O(n) loop
+        
         let combined = self.p1.or_with(&self.p2);
         combined.is_full(self.total_cells) && self.check_win().is_none()
     }
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn test_2d_lines_count() {
         let board = HyperBoard::new(2);
-        // (5^2 - 3^2)/2 = 8
+        
         match board.winning_masks {
             WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 8),
             _ => panic!("Wrong mask type"),
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn test_3d_lines_count() {
         let board = HyperBoard::new(3);
-        // 49
+        
         match board.winning_masks {
             WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 49),
             _ => panic!("Wrong mask type"),
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn test_4d_lines_count() {
         let board = HyperBoard::new(4);
-        // 272
+        
         match board.winning_masks {
             WinningMasks::Medium { masks, .. } => assert_eq!(masks.len(), 272),
             _ => panic!("Wrong mask type"),
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn test_reproduce_check_win_through_center() {
         let mut board = HyperBoard::new(3);
-        // 4, 13, 22
+        
         board.make_move(4, Player::X).unwrap();
         board.make_move(13, Player::X).unwrap();
         board.make_move(22, Player::X).unwrap();
@@ -358,19 +358,19 @@ mod tests {
     #[test]
     fn test_reproduce_ai_blocking() {
         let mut board = HyperBoard::new(3);
-        // Setup state where X has a single threat that O MUST block
-        // X has 4, 13 which threatens to win at 22 (Z-axis line: 4-13-22)
-        // We need to make sure X doesn't have a fork (multiple threats)
-        // So we DON'T give X position 3 (which would create 3-13-23 line)
+        
+        
+        
+        
 
-        board.make_move(4, Player::X).unwrap();   // (1,1,0)
-        board.make_move(13, Player::X).unwrap();  // (1,1,1) - center
+        board.make_move(4, Player::X).unwrap(); 
+        board.make_move(13, Player::X).unwrap(); 
 
-        board.make_move(0, Player::O).unwrap();   // corner
-        board.make_move(26, Player::O).unwrap();  // opposite corner
+        board.make_move(0, Player::O).unwrap(); 
+        board.make_move(26, Player::O).unwrap(); 
 
-        // It is O's turn - O must block at 22
-        let mut bot = crate::ai::MinimaxBot::new(5); // Depth 5 to be sure
+        
+        let mut bot = crate::ai::MinimaxBot::new(5); 
         let best_move = bot.get_best_move(&board, Player::O);
 
         assert_eq!(

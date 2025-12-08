@@ -1,9 +1,6 @@
-// src/ai.rs
 use crate::symmetries::SymmetryHandler;
 use crate::{HyperBoard, Player};
 use rustc_hash::FxHashMap;
-
-// --- Transposition Table Types ---
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Flag {
@@ -19,14 +16,12 @@ struct TranspositionEntry {
     flag: Flag,
 }
 
-// --- Minimax Bot ---
-
 pub struct MinimaxBot {
     transposition_table: FxHashMap<u64, TranspositionEntry>,
     zobrist_keys: Vec<[u64; 2]>,
     symmetries: Option<SymmetryHandler>,
     max_depth: usize,
-    /// Cached strategic values for move ordering
+
     strategic_values: Vec<usize>,
 }
 
@@ -63,7 +58,6 @@ impl MinimaxBot {
         }
     }
 
-    // Computes hashes for all symmetries from scratch
     fn initialize_rolling_hashes(&self, board: &HyperBoard) -> Vec<u64> {
         let handler = self.symmetries.as_ref().unwrap();
         let mut hashes = vec![0; handler.maps.len()];
@@ -98,21 +92,16 @@ impl MinimaxBot {
         }
     }
 
-    /// Computes the canonical (minimum) hash from all symmetry hashes.
     fn get_canonical_hash_fast(&self, hashes: &[u64]) -> u64 {
         *hashes.iter().min().unwrap_or(&0)
     }
 
-    /// Get available moves sorted by strategic value (descending)
     fn get_sorted_moves(&self, board: &HyperBoard) -> Vec<usize> {
         let mut moves: Vec<usize> = (0..board.total_cells())
             .filter(|&idx| board.get_cell(idx).is_none())
             .collect();
 
-        // Sort by strategic value (descending) - prioritizes center, corners, etc.
-        moves.sort_by(|&a, &b| {
-            self.strategic_values[b].cmp(&self.strategic_values[a])
-        });
+        moves.sort_by(|&a, &b| self.strategic_values[b].cmp(&self.strategic_values[a]));
 
         moves
     }
@@ -120,7 +109,6 @@ impl MinimaxBot {
     pub fn get_best_move(&mut self, board: &HyperBoard, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
-        // Initialize best_score based on player: X maximizes, O minimizes
         let mut best_score = match player {
             Player::X => i32::MIN,
             Player::O => i32::MAX,
@@ -132,7 +120,6 @@ impl MinimaxBot {
         let mut work_board = board.clone();
         let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
 
-        // Get sorted moves
         let available_moves = self.get_sorted_moves(&work_board);
 
         let opponent = match player {
@@ -216,7 +203,6 @@ impl MinimaxBot {
             Player::O => Player::X,
         };
 
-        // Get sorted moves for better alpha-beta cutoffs
         let moves = self.get_sorted_moves(board);
 
         let mut best_val = match current_player {
@@ -229,20 +215,12 @@ impl MinimaxBot {
             self.update_hashes(rolling_hashes, idx, current_player);
 
             let val = if board.check_win_at(idx) == Some(current_player) {
-                // Win detected at this move
                 match current_player {
                     Player::X => 1000 - depth as i32,
                     Player::O => -1000 + depth as i32,
                 }
             } else {
-                self.minimax(
-                    board,
-                    depth + 1,
-                    opponent,
-                    alpha,
-                    beta,
-                    rolling_hashes,
-                )
+                self.minimax(board, depth + 1, opponent, alpha, beta, rolling_hashes)
             };
 
             board.clear_cell(idx);
@@ -264,7 +242,6 @@ impl MinimaxBot {
             }
         }
 
-        // Handle case where no moves were evaluated (shouldn't happen if check_draw works)
         if (current_player == Player::X && best_val == i32::MIN)
             || (current_player == Player::O && best_val == i32::MAX)
         {

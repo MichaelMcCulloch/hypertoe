@@ -66,7 +66,7 @@ impl Game {
                 }
                 Err(e) => {
                     println!("Invalid move: {}", e);
-                    // Don't switch turn, retry
+                    
                 }
             }
         }
@@ -94,10 +94,10 @@ impl Game {
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
 
-            // Should properly parse coordinates too maybe?
-            // For now, raw index is easiest for debugging,
-            // but for user UX, maybe x,y,z is better?
-            // Let's stick to raw index for MVP as requested.
+            
+            
+            
+            
             match input.trim().parse::<usize>() {
                 Ok(idx) => return idx,
                 Err(_) => println!("Invalid number"),

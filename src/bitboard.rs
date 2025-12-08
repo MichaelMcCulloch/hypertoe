@@ -1,5 +1,3 @@
-// src/bitboard.rs
-
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::fmt;
@@ -81,7 +79,6 @@ impl BitBoard {
         }
     }
 
-    /// Returns the number of set bits (popcount)
     pub fn count_ones(&self) -> u32 {
         match self {
             BitBoard::Small(b) => b.count_ones(),
@@ -90,7 +87,6 @@ impl BitBoard {
         }
     }
 
-    /// Returns a new BitBoard that is the OR of self and other
     pub fn or_with(&self, other: &BitBoard) -> BitBoard {
         match (self, other) {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
@@ -98,27 +94,23 @@ impl BitBoard {
             (BitBoard::Large(a), BitBoard::Large(b)) => {
                 BitBoard::Large(a.iter().zip(b.iter()).map(|(x, y)| x | y).collect())
             }
-            _ => self.clone(), // Mismatched types, shouldn't happen
+            _ => self.clone(),
         }
     }
 
-    /// Checks if all bits up to total_cells are set
     pub fn is_full(&self, total_cells: usize) -> bool {
         self.count_ones() as usize >= total_cells
     }
 
     pub fn check_win(&self, winning_masks: &WinningMasks) -> bool {
         match (self, winning_masks) {
-            (BitBoard::Small(board), WinningMasks::Small { masks, .. }) => {
-                // Determine best implementation at compile time
-                unsafe { check_win_u32_opt(*board, masks) }
-            }
-            (BitBoard::Medium(board), WinningMasks::Medium { masks, .. }) => {
-                // Determine best implementation at compile time
-                unsafe { check_win_u128_opt(*board, masks) }
-            }
+            (BitBoard::Small(board), WinningMasks::Small { masks, .. }) => unsafe {
+                check_win_u32_opt(*board, masks)
+            },
+            (BitBoard::Medium(board), WinningMasks::Medium { masks, .. }) => unsafe {
+                check_win_u128_opt(*board, masks)
+            },
             (BitBoard::Large(board), WinningMasks::Large { masks, .. }) => {
-                // Too large for standard SIMD registers, using scalar iteration
                 masks.iter().any(|mask_chunks| {
                     board.len() == mask_chunks.len()
                         && board
@@ -175,14 +167,6 @@ impl BitBoard {
     }
 }
 
-// --- Optimized Implementations ---
-// These functions are selected at compile time based on available CPU features.
-
-// ---------------------------
-// u32 Implementations (Small)
-// ---------------------------
-
-// 1. AVX2 Implementation (Processes 8 masks at once)
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
@@ -198,20 +182,23 @@ unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
             return true;
         }
     }
-    // Fallback for remaining items
+
     for &m in remainder {
-        if (board & m) == m { return true; }
+        if (board & m) == m {
+            return true;
+        }
     }
     false
 }
 
-// 2. SSE2 Implementation (Processes 4 masks at once)
-// Triggered if AVX2 is NOT available but SSE2 IS.
-#[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(target_feature = "avx2")))]
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "sse2",
+    not(target_feature = "avx2")
+))]
 #[inline]
 unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
     unsafe {
-        // Instructional: Visualizing how 4 u32s fit in 128-bit register
         let board_vec = _mm_set1_epi32(board as i32);
         let chunks = masks.chunks_exact(4);
         let remainder = chunks.remainder();
@@ -221,8 +208,6 @@ unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
             let and_res = _mm_and_si128(board_vec, mask_vec);
             let cmp = _mm_cmpeq_epi32(and_res, mask_vec);
 
-            // movemask_epi8 creates a bitmask from the MSB of each byte.
-            // If a 32-bit lane is all 1s (match), its bytes are 0xFF, so MSBs are set.
             if _mm_movemask_epi8(cmp) != 0 {
                 return true;
             }
@@ -237,18 +222,12 @@ unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
     }
 }
 
-// 3. Scalar Fallback
 #[cfg(not(any(target_feature = "avx2", target_feature = "sse2")))]
 #[inline]
 unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
     masks.iter().any(|&m| (board & m) == m)
 }
 
-// -----------------------------
-// u128 Implementations (Medium)
-// -----------------------------
-
-// 1. AVX2 Implementation (Processes 2 masks at once)
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
@@ -256,8 +235,10 @@ unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
     let board_high = (board >> 64) as u64;
 
     let board_vec = _mm256_set_epi64x(
-        board_high as i64, board_low as i64,
-        board_high as i64, board_low as i64,
+        board_high as i64,
+        board_low as i64,
+        board_high as i64,
+        board_low as i64,
     );
 
     let chunks = masks.chunks_exact(2);
@@ -269,23 +250,23 @@ unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
         let cmp = _mm256_cmpeq_epi64(and_res, mask_vec);
 
         let mask_bits = _mm256_movemask_epi8(cmp);
-        // We need to check if a whole 128-bit lane matches.
-        // A 128-bit lane corresponds to 16 bytes.
-        // 0xFFFF checks the lower 128 bits, (mask_bits & 0xFFFF0000) checks upper.
-        if (mask_bits & 0xFFFF) == 0xFFFF { return true; }
-        if (mask_bits as u32 & 0xFFFF0000) == 0xFFFF0000 { return true; }
+
+        if (mask_bits & 0xFFFF) == 0xFFFF {
+            return true;
+        }
+        if (mask_bits as u32 & 0xFFFF0000) == 0xFFFF0000 {
+            return true;
+        }
     }
 
     for &m in remainder {
-        if (board & m) == m { return true; }
+        if (board & m) == m {
+            return true;
+        }
     }
     false
 }
 
-// 2. Scalar Fallback for SSE2/Non-AVX2
-// Note: Explicit SSE2 for u128 provides no throughput benefit over scalar
-// because an SSE2 register is 128 bits (holds exactly 1 mask).
-// Scalar u128 operations are already optimized to use registers efficiently.
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 #[inline]
 unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
