@@ -273,4 +273,20 @@ mod tests {
         board.make_move(2, Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
+
+    #[test]
+    fn test_diagonal_win_20_11_02() {
+        let mut board = HyperBoard::new(2);
+        // . . X  (2)
+        // . X .  (4)
+        // X . .  (6)
+        board.make_move(2, Player::X).unwrap();
+        board.make_move(4, Player::X).unwrap();
+        board.make_move(6, Player::X).unwrap();
+        
+        // Debug print lines if needed
+        // println!("Lines: {:?}", board.winning_lines);
+        
+        assert_eq!(board.check_win(), Some(Player::X));
+    }
 }
