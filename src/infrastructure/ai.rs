@@ -2,7 +2,8 @@ use crate::domain::models::{Player, BoardState};
 use crate::domain::services::PlayerStrategy;
 use crate::infrastructure::persistence::{BitBoardState, BitBoard, WinningMasks};
 use crate::infrastructure::symmetries::SymmetryHandler;
-use rustc_hash::FxHashMap;
+use dashmap::DashMap;
+use rayon::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Flag {
@@ -19,7 +20,7 @@ struct TranspositionEntry {
 }
 
 pub struct MinimaxBot {
-    transposition_table: FxHashMap<u64, TranspositionEntry>,
+    transposition_table: DashMap<u64, TranspositionEntry>,
     zobrist_keys: Vec<[u64; 2]>,
     symmetries: Option<SymmetryHandler>,
     max_depth: usize,
@@ -29,7 +30,7 @@ pub struct MinimaxBot {
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
         MinimaxBot {
-            transposition_table: FxHashMap::default(),
+            transposition_table: DashMap::new(),
             zobrist_keys: Vec::new(),
             symmetries: None,
             max_depth,
@@ -61,7 +62,7 @@ impl MinimaxBot {
     }
 
     fn get_strategic_value(&self, board: &BitBoardState, index: usize) -> usize {
-        match &board.winning_masks {
+        match &*board.winning_masks {
             WinningMasks::Small { map, .. } => map.get(index).map_or(0, |v| v.len()),
             WinningMasks::Medium { map, .. } => map.get(index).map_or(0, |v| v.len()),
             WinningMasks::Large { map, .. } => map.get(index).map_or(0, |v| v.len()),
@@ -116,7 +117,7 @@ impl MinimaxBot {
     }
 
     fn minimax(
-        &mut self,
+        &self,
         board: &mut BitBoardState,
         depth: usize,
         current_player: Player,
@@ -160,16 +161,11 @@ impl MinimaxBot {
         // This calculates check_win().
         
         // We can trust BoardState::check_win which delegates to BitBoard.
-        if board.check_win().is_some() {
-             // If we're here, the *previous* player made a winning line.
-             // But we usually check 'win_at' immediately after move.
-             // If existing logic assumes we check here:
-             // return specific score?
-             // Actually, original code checked 'check_win_at' inside the loop.
-             // checks `check_draw` at start.
-             
-             // If someone won, returning score is tricky based on depth?
-             // Let's rely on loop check.
+        if let Some(winner) = board.check_win() {
+            return match winner {
+                Player::X => 1000 - depth as i32,
+                Player::O => -1000 + depth as i32,
+            };
         }
         
         if board.is_full() && board.check_win().is_none() {
@@ -258,7 +254,7 @@ impl MinimaxBot {
 
     fn evaluate(&self, board: &BitBoardState) -> i32 {
          let mut score = 0;
-         match &board.winning_masks {
+         match &*board.winning_masks {
             WinningMasks::Small { masks, .. } => {
                 let p1 = match board.p1 { BitBoard::Small(b) => b, _ => 0 };
                 let p2 = match board.p2 { BitBoard::Small(b) => b, _ => 0 };
@@ -295,50 +291,118 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
     fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
-        let mut best_score = match player {
-            Player::X => i32::MIN,
-            Player::O => i32::MAX,
-        };
-        let mut best_move = None;
-        let mut alpha = i32::MIN + 1;
-        let beta = i32::MAX - 1;
+        let available_moves = self.get_sorted_moves(board);
+        if available_moves.is_empty() {
+            return None;
+        }
 
+        // --- FIRST MOVE SEQUENTIAL SEARCH ---
+        // Search the first move (best according to heuristics) sequentially
+        // to establish a good alpha/beta bound.
+        let first_move = available_moves[0];
         let mut work_board = board.clone();
         let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
-        let available_moves = self.get_sorted_moves(&work_board);
+        
+        work_board.set_cell(first_move, player).unwrap();
+        self.update_hashes(&mut rolling_hashes, first_move, player);
 
-        let opponent = player.opponent();
+        let first_score = self.minimax(
+            &mut work_board,
+            0,
+            player.opponent(),
+            i32::MIN + 1,
+            i32::MAX - 1,
+            &mut rolling_hashes,
+        );
 
-        for &mv in &available_moves {
+        let (alpha, beta) = match player {
+            Player::X => (first_score, i32::MAX - 1),
+            Player::O => (i32::MIN + 1, first_score),
+        };
+
+        if available_moves.len() == 1 {
+            return Some(first_move);
+        }
+
+        // --- REMAINING MOVES PARALLEL SEARCH ---
+        // Search the rest in parallel with stricter bounds.
+        // Note: We cannot easily update alpha/beta across threads dynamically without
+        // complex synchronization (atomics), but the first move usually provides
+        // the most significant cut.
+        
+        let best_move_entry = available_moves[1..].par_iter().map(|&mv| {
+            let mut work_board = board.clone();
+            let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
+
             work_board.set_cell(mv, player).unwrap();
             self.update_hashes(&mut rolling_hashes, mv, player);
 
             let score = self.minimax(
                 &mut work_board,
                 0,
-                opponent,
+                player.opponent(),
                 alpha,
                 beta,
                 &mut rolling_hashes,
             );
+            
+            (mv, score)
+        }).max_by(|a, b| {
+            match player {
+                Player::X => a.1.cmp(&b.1),
+                Player::O => b.1.cmp(&a.1),
+            }
+        });
 
-            work_board.clear_cell(mv);
-            self.update_hashes(&mut rolling_hashes, mv, player);
-
-            let is_better = match player {
-                Player::X => score > best_score,
-                Player::O => score < best_score,
-            };
-
-            if is_better {
-                best_score = score;
-                best_move = Some(mv);
-                if player == Player::X {
-                    alpha = alpha.max(score);
+        if let Some((best_parallel_move, best_parallel_score)) = best_move_entry {
+             match player {
+                Player::X => {
+                    if best_parallel_score > first_score {
+                        return Some(best_parallel_move);
+                    }
+                }
+                Player::O => {
+                    if best_parallel_score < first_score {
+                        return Some(best_parallel_move);
+                    }
                 }
             }
         }
 
-        best_move.or(available_moves.first().copied())
+        Some(first_move)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infrastructure::persistence::BitBoardState;
+    use crate::domain::models::Player;
+    use crate::domain::services::PlayerStrategy;
+
+    #[test]
+    fn test_minimax_multiprocess_smoke_test() {
+        let board = BitBoardState::new(2); // 3x3
+        let mut bot = MinimaxBot::new(9);
+        let best_move = bot.get_best_move(&board, Player::X);
+        assert!(best_move.is_some());
+    }
+
+    #[test]
+    fn test_minimax_blocks_win() {
+        let mut board = BitBoardState::new(2);
+        board.set_cell(0, Player::X).unwrap();
+        board.set_cell(3, Player::O).unwrap();
+        board.set_cell(4, Player::O).unwrap();
+        
+        // Board:
+        // X . .  (0, 1, 2)
+        // O O .  (3, 4, 5)
+        // . . .  (6, 7, 8)
+        
+        let mut bot = MinimaxBot::new(5);
+        let best_move = bot.get_best_move(&board, Player::X);
+        
+        assert_eq!(best_move, Some(5));
     }
 }

@@ -1,6 +1,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::fmt;
+use std::sync::Arc;
 use crate::domain::models::{BoardState, Player};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -33,7 +34,7 @@ pub struct BitBoardState {
     pub total_cells: usize,
     pub p1: BitBoard,
     pub p2: BitBoard,
-    pub winning_masks: WinningMasks,
+    pub winning_masks: Arc<WinningMasks>,
 }
 
 impl BoardState for BitBoardState {
@@ -44,7 +45,7 @@ impl BoardState for BitBoardState {
         let p1 = BitBoard::new_empty(dimension, side);
         let p2 = BitBoard::new_empty(dimension, side);
 
-        let winning_masks = generate_winning_masks(dimension, side);
+        let winning_masks = Arc::new(generate_winning_masks(dimension, side));
 
         BitBoardState {
             dimension,
@@ -436,16 +437,18 @@ fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
-    let board_vec = _mm256_set1_epi32(board as i32);
+    let board_vec = unsafe { _mm256_set1_epi32(board as i32) };
     let chunks = masks.chunks_exact(8);
     let remainder = chunks.remainder();
 
     for chunk in chunks {
-        let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
-        let and_res = _mm256_and_si256(board_vec, mask_vec);
-        let cmp = _mm256_cmpeq_epi32(and_res, mask_vec);
-        if _mm256_movemask_epi8(cmp) != 0 {
-            return true;
+        unsafe {
+            let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
+            let and_res = _mm256_and_si256(board_vec, mask_vec);
+            let cmp = _mm256_cmpeq_epi32(and_res, mask_vec);
+            if _mm256_movemask_epi8(cmp) != 0 {
+                return true;
+            }
         }
     }
 
@@ -500,28 +503,32 @@ unsafe fn check_win_u128_opt(board: u128, masks: &[u128]) -> bool {
     let board_low = board as u64;
     let board_high = (board >> 64) as u64;
 
-    let board_vec = _mm256_set_epi64x(
-        board_high as i64,
-        board_low as i64,
-        board_high as i64,
-        board_low as i64,
-    );
+    let board_vec = unsafe {
+        _mm256_set_epi64x(
+            board_high as i64,
+            board_low as i64,
+            board_high as i64,
+            board_low as i64,
+        )
+    };
 
     let chunks = masks.chunks_exact(2);
     let remainder = chunks.remainder();
 
     for chunk in chunks {
-        let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
-        let and_res = _mm256_and_si256(board_vec, mask_vec);
-        let cmp = _mm256_cmpeq_epi64(and_res, mask_vec);
+        unsafe {
+            let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
+            let and_res = _mm256_and_si256(board_vec, mask_vec);
+            let cmp = _mm256_cmpeq_epi64(and_res, mask_vec);
 
-        let mask_bits = _mm256_movemask_epi8(cmp);
+            let mask_bits = _mm256_movemask_epi8(cmp);
 
-        if (mask_bits & 0xFFFF) == 0xFFFF {
-            return true;
-        }
-        if (mask_bits as u32 & 0xFFFF0000) == 0xFFFF0000 {
-            return true;
+            if (mask_bits & 0xFFFF) == 0xFFFF {
+                return true;
+            }
+            if (mask_bits as u32 & 0xFFFF0000) == 0xFFFF0000 {
+                return true;
+            }
         }
     }
 
@@ -547,7 +554,7 @@ mod tests {
     #[test]
     fn test_2d_lines_count() {
         let board = BitBoardState::new(2);
-        match board.winning_masks {
+        match &*board.winning_masks {
             WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 8),
             _ => panic!("Wrong mask type"),
         }
@@ -556,7 +563,7 @@ mod tests {
     #[test]
     fn test_3d_lines_count() {
         let board = BitBoardState::new(3);
-        match board.winning_masks {
+        match &*board.winning_masks {
             WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 49),
             _ => panic!("Wrong mask type"),
         }
@@ -565,7 +572,7 @@ mod tests {
     #[test]
     fn test_4d_lines_count() {
         let board = BitBoardState::new(4);
-        match board.winning_masks {
+        match &*board.winning_masks {
             WinningMasks::Medium { masks, .. } => assert_eq!(masks.len(), 272),
             _ => panic!("Wrong mask type"),
         }
