@@ -4,6 +4,14 @@ use crate::infrastructure::persistence::{BitBoard, BitBoardState, WinningMasks};
 use crate::infrastructure::symmetries::SymmetryHandler;
 use dashmap::DashMap;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[derive(Default, Debug)]
+pub struct SearchStats {
+    pub nodes_searched: AtomicUsize,
+    pub tt_hits: AtomicUsize,
+    pub tt_exact_hits: AtomicUsize,
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Flag {
@@ -17,6 +25,7 @@ struct TranspositionEntry {
     score: i32,
     depth: u8,
     flag: Flag,
+    best_move: Option<u8>,
 }
 
 pub struct MinimaxBot {
@@ -25,6 +34,7 @@ pub struct MinimaxBot {
     symmetries: Option<SymmetryHandler>,
     max_depth: usize,
     strategic_values: Vec<usize>,
+    pub stats: SearchStats,
 }
 
 impl MinimaxBot {
@@ -35,6 +45,7 @@ impl MinimaxBot {
             symmetries: None,
             max_depth,
             strategic_values: Vec::new(),
+            stats: SearchStats::default(),
         }
     }
 
@@ -135,8 +146,12 @@ impl MinimaxBot {
 
         if let Some(entry) = self.transposition_table.get(&canonical_hash) {
             if entry.depth >= remaining_depth {
+                self.stats.tt_hits.fetch_add(1, Ordering::Relaxed);
                 match entry.flag {
-                    Flag::Exact => return entry.score,
+                    Flag::Exact => {
+                        self.stats.tt_exact_hits.fetch_add(1, Ordering::Relaxed);
+                        return entry.score;
+                    }
                     Flag::LowerBound => alpha = alpha.max(entry.score),
                     Flag::UpperBound => beta = beta.min(entry.score),
                 }
@@ -144,6 +159,11 @@ impl MinimaxBot {
                     return entry.score;
                 }
             }
+        }
+
+        let mut tt_move = None;
+        if let Some(entry) = self.transposition_table.get(&canonical_hash) {
+            tt_move = entry.best_move.map(|m| m as usize);
         }
 
         if let Some(winner) = board.check_win() {
@@ -161,13 +181,22 @@ impl MinimaxBot {
             return self.evaluate(board);
         }
 
+        self.stats.nodes_searched.fetch_add(1, Ordering::Relaxed);
+
         let opponent = current_player.opponent();
-        let moves = self.get_sorted_moves(board);
+        let mut moves = self.get_sorted_moves(board);
+
+        if let Some(tm) = tt_move {
+            if let Some(pos) = moves.iter().position(|&m| m == tm) {
+                moves.swap(0, pos);
+            }
+        }
 
         let mut best_val = match current_player {
             Player::X => i32::MIN,
             Player::O => i32::MAX,
         };
+        let mut best_move = None;
 
         for idx in moves {
             board.set_cell(idx, current_player).unwrap();
@@ -191,11 +220,17 @@ impl MinimaxBot {
 
             match current_player {
                 Player::X => {
-                    best_val = best_val.max(val);
+                    if val > best_val {
+                        best_val = val;
+                        best_move = Some(idx);
+                    }
                     alpha = alpha.max(val);
                 }
                 Player::O => {
-                    best_val = best_val.min(val);
+                    if val < best_val {
+                        best_val = val;
+                        best_move = Some(idx);
+                    }
                     beta = beta.min(val);
                 }
             }
@@ -223,6 +258,7 @@ impl MinimaxBot {
             score: best_val,
             depth: remaining_depth,
             flag,
+            best_move: best_move.map(|m| m as u8),
         };
         self.transposition_table.insert(canonical_hash, entry);
 
@@ -296,7 +332,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
     fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
-        let available_moves = self.get_sorted_moves(board);
+        let mut available_moves = self.get_sorted_moves(board);
         if available_moves.is_empty() {
             return None;
         }
@@ -305,32 +341,58 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
             return Some(available_moves[0]);
         }
 
-        let best_move_entry = available_moves
-            .par_iter()
-            .map(|&mv| {
-                let mut work_board = board.clone();
-                let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
+        let original_max_depth = self.max_depth;
 
-                work_board.set_cell(mv, player).unwrap();
-                self.update_hashes(&mut rolling_hashes, mv, player);
+        let mut current_best_move_entry: Option<(usize, i32)> = None;
 
-                let score = self.minimax(
-                    &mut work_board,
-                    0,
-                    player.opponent(),
-                    i32::MIN + 1,
-                    i32::MAX - 1,
-                    &mut rolling_hashes,
-                );
+        for d in 1..=original_max_depth {
+            self.max_depth = d;
 
-                (mv, score)
-            })
-            .max_by(|a, b| match player {
-                Player::X => a.1.cmp(&b.1),
-                Player::O => b.1.cmp(&a.1),
-            });
+            if let Some((best_mv, _)) = current_best_move_entry {
+                if let Some(pos) = available_moves.iter().position(|&m| m == best_mv) {
+                    available_moves.swap(0, pos);
+                }
+            }
 
-        best_move_entry.map(|(mv, _)| mv)
+            let best_move_entry = available_moves
+                .par_iter()
+                .map(|&mv| {
+                    let mut work_board = board.clone();
+                    let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
+
+                    work_board.set_cell(mv, player).unwrap();
+                    self.update_hashes(&mut rolling_hashes, mv, player);
+
+                    let score = self.minimax(
+                        &mut work_board,
+                        0,
+                        player.opponent(),
+                        i32::MIN + 1,
+                        i32::MAX - 1,
+                        &mut rolling_hashes,
+                    );
+
+                    (mv, score)
+                })
+                .max_by(|a, b| match player {
+                    Player::X => a.1.cmp(&b.1),
+                    Player::O => b.1.cmp(&a.1),
+                });
+
+            current_best_move_entry = best_move_entry;
+
+            println!(
+                "ID Depth: {}, Nodes: {}, TT Hits: {}, Exact Hits: {}",
+                d,
+                self.stats.nodes_searched.load(Ordering::Relaxed),
+                self.stats.tt_hits.load(Ordering::Relaxed),
+                self.stats.tt_exact_hits.load(Ordering::Relaxed)
+            );
+        }
+
+        self.max_depth = original_max_depth;
+
+        current_best_move_entry.map(|(mv, _)| mv)
     }
 }
 
