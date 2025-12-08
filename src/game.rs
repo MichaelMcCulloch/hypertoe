@@ -17,13 +17,13 @@ pub struct Game {
 }
 
 impl Game {
-    pub fn new(dimension: usize, player_x: PlayerType, player_o: PlayerType) -> Self {
+    pub fn new(dimension: usize, player_x: PlayerType, player_o: PlayerType, depth: usize) -> Self {
         Game {
             board: HyperBoard::new(dimension),
             player_x,
             player_o,
             turn: Player::X,
-            bot: MinimaxBot::new(3), // Depth limit 3 for starters
+            bot: MinimaxBot::new(depth),
         }
     }
 
