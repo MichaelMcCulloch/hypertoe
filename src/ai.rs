@@ -46,7 +46,6 @@ impl MinimaxBot {
         let current_hash = self.compute_hash(&work_board);
 
         let mut available_moves = Vec::new();
-        // Updated loop
         for idx in 0..work_board.total_cells() {
             if work_board.get_cell(idx).is_none() {
                 available_moves.push(idx);
@@ -60,12 +59,12 @@ impl MinimaxBot {
 
         for &mv in &available_moves {
             // Make move
-            work_board.make_move(mv, player).unwrap(); // Should be safe
+            work_board.make_move(mv, player).unwrap();
             let move_hash = current_hash ^ self.get_zobrist_key(mv, player);
 
             let score = self.minimax(&mut work_board, 0, opponent, alpha, beta, move_hash);
             
-            // Unmake move - needs clear_cell
+            // Unmake move
             work_board.clear_cell(mv);
             
             match player {
@@ -73,18 +72,62 @@ impl MinimaxBot {
                     if score > best_score {
                         best_score = score;
                         best_move = Some(mv);
+                    } else if score == best_score {
+                         // Tie-breaker: If new move blocks a win and current best doesn't, switch.
+                         if let Some(curr) = best_move {
+                             let new_blocks = self.does_move_block(board, mv, player);
+                             let curr_blocks = self.does_move_block(board, curr, player);
+                             if new_blocks && !curr_blocks {
+                                 best_move = Some(mv);
+                             }
+                         } else {
+                             best_move = Some(mv);
+                         }
                     }
                 },
                 Player::O => {
                     if score < best_score {
                         best_score = score;
                         best_move = Some(mv);
+                    } else if score == best_score {
+                        // Tie-breaker: If new move blocks a win and current best doesn't, switch.
+                         if let Some(curr) = best_move {
+                             let new_blocks = self.does_move_block(board, mv, player);
+                             let curr_blocks = self.does_move_block(board, curr, player);
+                             if new_blocks && !curr_blocks {
+                                 best_move = Some(mv);
+                             }
+                         } else {
+                             best_move = Some(mv);
+                         }
                     }
                 }
             }
         }
         
         best_move.or(available_moves.first().copied())
+    }
+
+    fn does_move_block(&self, board: &HyperBoard, mv: usize, player: Player) -> bool {
+        let opponent = match player {
+            Player::X => Player::O,
+            Player::O => Player::X,
+        };
+        // Check if opponent would win if they took this spot
+        // We need a mutable board copy or just set bit temporarily? 
+        // Board logic is in HyperBoard. We can't easily mutate &board.
+        // But we have `work_board` in calling function.
+        // However, `work_board` is mutated in loop.
+        // Let's make a cheap copy for this check? Or optimize.
+        // Clone is okay for N=3 (small).
+        let mut test_board = board.clone();
+        // Ignore errors (e.g. if occupied, but we know it's empty from available_moves)
+        if test_board.make_move(mv, opponent).is_ok() {
+            if test_board.check_win() == Some(opponent) {
+                return true;
+            }
+        }
+        false
     }
     
     fn compute_hash(&self, board: &HyperBoard) -> u64 {

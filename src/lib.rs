@@ -323,4 +323,36 @@ mod tests {
         board.make_move(6, Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
+
+    #[test]
+    fn test_reproduce_check_win_through_center() {
+        let mut board = HyperBoard::new(3);
+        // 4, 13, 22
+        board.make_move(4, Player::X).unwrap();
+        board.make_move(13, Player::X).unwrap();
+        board.make_move(22, Player::X).unwrap();
+        
+        assert_eq!(board.check_win(), Some(Player::X), "Failed to detect Z-axis win through center");
+    }
+
+    #[test]
+    fn test_reproduce_ai_blocking() {
+        let mut board = HyperBoard::new(3);
+        // Setup state where O missed the block
+        // X has 4, 13
+        // O has 0, 5 (just distractor moves)
+        
+        board.make_move(3, Player::X).unwrap();
+        board.make_move(4, Player::X).unwrap();
+        board.make_move(13, Player::X).unwrap();
+        
+        board.make_move(0, Player::O).unwrap();
+        board.make_move(5, Player::O).unwrap();
+        
+        // It is O's turn
+        let mut bot = crate::ai::MinimaxBot::new(3); // Depth 3 should be enough
+        let best_move = bot.get_best_move(&board, Player::O);
+        
+        assert_eq!(best_move, Some(22), "AI failed to block the winning move at 22");
+    }
 }
