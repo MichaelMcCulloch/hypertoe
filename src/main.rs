@@ -1,5 +1,5 @@
 use hypertictactoe::application::game_service::GameService;
-use hypertictactoe::domain::models::{Board, BoardState, Player};
+use hypertictactoe::domain::models::Board;
 use hypertictactoe::domain::services::PlayerStrategy;
 use hypertictactoe::infrastructure::ai::MinimaxBot;
 use hypertictactoe::infrastructure::console::HumanConsolePlayer;
@@ -35,30 +35,93 @@ fn main() {
             dimension = d;
         }
     }
+
+    let mut train_mode = false;
+    let q_table_path = "qtable.bin".to_string();
+
     if args.len() > 2 {
         let mode = args[2].as_str();
-        if mode.len() >= 2 {
+        if mode == "Q" {
+            train_mode = true;
+        } else if mode.len() >= 2 {
             player_x_type = &mode[0..1];
             player_o_type = &mode[1..2];
         }
     }
+
+    // Q-Learning Training Mode
+    if train_mode {
+        use hypertictactoe::infrastructure::ai::QLearner;
+        println!(
+            "Starting Q-Learning training for dimension {}...",
+            dimension
+        );
+        let learner = if std::path::Path::new(&q_table_path).exists() {
+            println!("Loading existing Q-table...");
+            QLearner::load(&q_table_path).unwrap_or_else(|e| {
+                println!("Failed to load Q-table: {}. Starting fresh.", e);
+                QLearner::new(0.1, dimension)
+            })
+        } else {
+            QLearner::new(0.1, dimension)
+        };
+
+        // Suppress unused variable warning if we don't use it directly in loop logic
+        let _num_games = 1_000_000;
+
+        println!("Training on billions of games (simulated loop)...");
+        let games_per_epoch = 100_000;
+        let mut total_games = 0u64;
+
+        loop {
+            let (max_delta, visited_states) = learner.train(games_per_epoch, dimension);
+            total_games += games_per_epoch;
+
+            // Convergence check
+            if max_delta < 0.000001 && total_games > 100_000 {
+                println!("Converged! Max Delta: {:.6}", max_delta);
+                learner.save(&q_table_path).expect("Failed to save Q-table");
+                break;
+            }
+
+            if total_games % 1_000_000 == 0 {
+                println!(
+                    " trained {} games... States: {}, Max Delta: {:.6}",
+                    total_games, visited_states, max_delta
+                );
+                learner.save(&q_table_path).expect("Failed to save Q-table");
+            }
+        }
+        return;
+    }
+
     if args.len() > 3 {
         if let Ok(d) = args[3].parse::<usize>() {
             depth = d;
         }
     }
 
-    let board_state = BitBoardState::new(dimension);
+    // Helper to load Q-player
+    let load_q_player = || {
+        use hypertictactoe::infrastructure::ai::QLearner;
+        if std::path::Path::new(&q_table_path).exists() {
+            QLearner::load(&q_table_path).expect("Failed to load Q-table")
+        } else {
+            panic!("No Q-table found. Run with mode 'Q' to train first.");
+        }
+    };
 
     let player_x: Box<dyn PlayerStrategy<BitBoardState>> = match player_x_type {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(MinimaxBot::new(depth)),
+        "q" => Box::new(load_q_player()),
         _ => Box::new(HumanConsolePlayer::new()),
     };
 
     let player_o: Box<dyn PlayerStrategy<BitBoardState>> = match player_o_type {
         "h" => Box::new(HumanConsolePlayer::new()),
         "c" => Box::new(MinimaxBot::new(depth)),
+        "q" => Box::new(load_q_player()),
         _ => Box::new(MinimaxBot::new(depth)),
     };
 
