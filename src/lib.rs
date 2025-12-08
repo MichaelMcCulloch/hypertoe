@@ -282,18 +282,9 @@ impl HyperBoard {
     }
 
     pub fn check_draw(&self) -> bool {
-        // Check if full.
-        // Counting bits would require popcount.
-        // Iterating is safer for now or adding popcount to BitBoard.
-        // Or simply: total_cells calls to get_bit? Slow.
-        // Add `is_full` to BitBoard?
-        // Fallback:
-        // Or we can track move count in Game?
-        // Let's implement an imperfect check: verify all cells are occupied.
-        // Efficiency: (p1 | p2).popcount() == total_cells?
-        // For now, simple loop:
-        (0..self.total_cells).all(|i| self.p1.get_bit(i) || self.p2.get_bit(i))
-            && self.check_win().is_none()
+        // Use popcount: O(1) instead of O(n) loop
+        let combined = self.p1.or_with(&self.p2);
+        combined.is_full(self.total_cells) && self.check_win().is_none()
     }
 }
 
@@ -306,7 +297,7 @@ mod tests {
         let board = HyperBoard::new(2);
         // (5^2 - 3^2)/2 = 8
         match board.winning_masks {
-            WinningMasks::Small(masks) => assert_eq!(masks.len(), 8),
+            WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 8),
             _ => panic!("Wrong mask type"),
         }
     }
@@ -316,7 +307,7 @@ mod tests {
         let board = HyperBoard::new(3);
         // 49
         match board.winning_masks {
-            WinningMasks::Small(masks) => assert_eq!(masks.len(), 49),
+            WinningMasks::Small { masks, .. } => assert_eq!(masks.len(), 49),
             _ => panic!("Wrong mask type"),
         }
     }
@@ -326,7 +317,7 @@ mod tests {
         let board = HyperBoard::new(4);
         // 272
         match board.winning_masks {
-            WinningMasks::Medium(masks) => assert_eq!(masks.len(), 272),
+            WinningMasks::Medium { masks, .. } => assert_eq!(masks.len(), 272),
             _ => panic!("Wrong mask type"),
         }
     }
@@ -367,19 +358,19 @@ mod tests {
     #[test]
     fn test_reproduce_ai_blocking() {
         let mut board = HyperBoard::new(3);
-        // Setup state where O missed the block
-        // X has 4, 13
-        // O has 0, 5 (just distractor moves)
+        // Setup state where X has a single threat that O MUST block
+        // X has 4, 13 which threatens to win at 22 (Z-axis line: 4-13-22)
+        // We need to make sure X doesn't have a fork (multiple threats)
+        // So we DON'T give X position 3 (which would create 3-13-23 line)
 
-        board.make_move(3, Player::X).unwrap();
-        board.make_move(4, Player::X).unwrap();
-        board.make_move(13, Player::X).unwrap();
+        board.make_move(4, Player::X).unwrap();   // (1,1,0)
+        board.make_move(13, Player::X).unwrap();  // (1,1,1) - center
 
-        board.make_move(0, Player::O).unwrap();
-        board.make_move(5, Player::O).unwrap();
+        board.make_move(0, Player::O).unwrap();   // corner
+        board.make_move(26, Player::O).unwrap();  // opposite corner
 
-        // It is O's turn
-        let mut bot = crate::ai::MinimaxBot::new(3); // Depth 3 should be enough
+        // It is O's turn - O must block at 22
+        let mut bot = crate::ai::MinimaxBot::new(5); // Depth 5 to be sure
         let best_move = bot.get_best_move(&board, Player::O);
 
         assert_eq!(

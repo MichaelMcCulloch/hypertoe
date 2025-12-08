@@ -81,6 +81,32 @@ impl BitBoard {
         }
     }
 
+    /// Returns the number of set bits (popcount)
+    pub fn count_ones(&self) -> u32 {
+        match self {
+            BitBoard::Small(b) => b.count_ones(),
+            BitBoard::Medium(b) => b.count_ones(),
+            BitBoard::Large(v) => v.iter().map(|chunk| chunk.count_ones()).sum(),
+        }
+    }
+
+    /// Returns a new BitBoard that is the OR of self and other
+    pub fn or_with(&self, other: &BitBoard) -> BitBoard {
+        match (self, other) {
+            (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
+            (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
+            (BitBoard::Large(a), BitBoard::Large(b)) => {
+                BitBoard::Large(a.iter().zip(b.iter()).map(|(x, y)| x | y).collect())
+            }
+            _ => self.clone(), // Mismatched types, shouldn't happen
+        }
+    }
+
+    /// Checks if all bits up to total_cells are set
+    pub fn is_full(&self, total_cells: usize) -> bool {
+        self.count_ones() as usize >= total_cells
+    }
+
     pub fn check_win(&self, winning_masks: &WinningMasks) -> bool {
         match (self, winning_masks) {
             (BitBoard::Small(board), WinningMasks::Small { masks, .. }) => {
@@ -184,27 +210,31 @@ unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2", not(target_feature = "avx2")))]
 #[inline]
 unsafe fn check_win_u32_opt(board: u32, masks: &[u32]) -> bool {
-     // Instructional: Visualizing how 4 u32s fit in 128-bit register
-    let board_vec = _mm_set1_epi32(board as i32);
-    let chunks = masks.chunks_exact(4);
-    let remainder = chunks.remainder();
+    unsafe {
+        // Instructional: Visualizing how 4 u32s fit in 128-bit register
+        let board_vec = _mm_set1_epi32(board as i32);
+        let chunks = masks.chunks_exact(4);
+        let remainder = chunks.remainder();
 
-    for chunk in chunks {
-        let mask_vec = _mm_loadu_si128(chunk.as_ptr() as *const __m128i);
-        let and_res = _mm_and_si128(board_vec, mask_vec);
-        let cmp = _mm_cmpeq_epi32(and_res, mask_vec);
-        
-        // movemask_epi8 creates a bitmask from the MSB of each byte.
-        // If a 32-bit lane is all 1s (match), its bytes are 0xFF, so MSBs are set.
-        if _mm_movemask_epi8(cmp) != 0 {
-            return true;
+        for chunk in chunks {
+            let mask_vec = _mm_loadu_si128(chunk.as_ptr() as *const __m128i);
+            let and_res = _mm_and_si128(board_vec, mask_vec);
+            let cmp = _mm_cmpeq_epi32(and_res, mask_vec);
+
+            // movemask_epi8 creates a bitmask from the MSB of each byte.
+            // If a 32-bit lane is all 1s (match), its bytes are 0xFF, so MSBs are set.
+            if _mm_movemask_epi8(cmp) != 0 {
+                return true;
+            }
         }
-    }
 
-    for &m in remainder {
-        if (board & m) == m { return true; }
+        for &m in remainder {
+            if (board & m) == m {
+                return true;
+            }
+        }
+        false
     }
-    false
 }
 
 // 3. Scalar Fallback

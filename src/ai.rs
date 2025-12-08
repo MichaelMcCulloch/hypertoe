@@ -1,7 +1,7 @@
 // src/ai.rs
 use crate::symmetries::SymmetryHandler;
 use crate::{HyperBoard, Player};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 // --- Transposition Table Types ---
 
@@ -22,19 +22,22 @@ struct TranspositionEntry {
 // --- Minimax Bot ---
 
 pub struct MinimaxBot {
-    transposition_table: HashMap<u64, TranspositionEntry>,
+    transposition_table: FxHashMap<u64, TranspositionEntry>,
     zobrist_keys: Vec<[u64; 2]>,
     symmetries: Option<SymmetryHandler>,
     max_depth: usize,
+    /// Cached strategic values for move ordering
+    strategic_values: Vec<usize>,
 }
 
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
         MinimaxBot {
-            transposition_table: HashMap::new(),
+            transposition_table: FxHashMap::default(),
             zobrist_keys: Vec::new(),
             symmetries: None,
             max_depth,
+            strategic_values: Vec::new(),
         }
     }
 
@@ -52,9 +55,15 @@ impl MinimaxBot {
         if self.symmetries.is_none() {
             self.symmetries = Some(SymmetryHandler::new(board.dimension, board.side));
         }
+
+        if self.strategic_values.len() < board.total_cells() {
+            self.strategic_values = (0..board.total_cells())
+                .map(|i| board.get_strategic_value(i))
+                .collect();
+        }
     }
 
-    // New: Computes hashes for all symmetries from scratch
+    // Computes hashes for all symmetries from scratch
     fn initialize_rolling_hashes(&self, board: &HyperBoard) -> Vec<u64> {
         let handler = self.symmetries.as_ref().unwrap();
         let mut hashes = vec![0; handler.maps.len()];
@@ -89,16 +98,33 @@ impl MinimaxBot {
         }
     }
 
+    /// Computes the canonical (minimum) hash from all symmetry hashes.
     fn get_canonical_hash_fast(&self, hashes: &[u64]) -> u64 {
         *hashes.iter().min().unwrap_or(&0)
     }
 
-    // src/ai.rs inside impl MinimaxBot
+    /// Get available moves sorted by strategic value (descending)
+    fn get_sorted_moves(&self, board: &HyperBoard) -> Vec<usize> {
+        let mut moves: Vec<usize> = (0..board.total_cells())
+            .filter(|&idx| board.get_cell(idx).is_none())
+            .collect();
+
+        // Sort by strategic value (descending) - prioritizes center, corners, etc.
+        moves.sort_by(|&a, &b| {
+            self.strategic_values[b].cmp(&self.strategic_values[a])
+        });
+
+        moves
+    }
 
     pub fn get_best_move(&mut self, board: &HyperBoard, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
-        let mut best_score = i32::MIN;
+        // Initialize best_score based on player: X maximizes, O minimizes
+        let mut best_score = match player {
+            Player::X => i32::MIN,
+            Player::O => i32::MAX,
+        };
         let mut best_move = None;
         let mut alpha = i32::MIN + 1;
         let beta = i32::MAX - 1;
@@ -106,22 +132,8 @@ impl MinimaxBot {
         let mut work_board = board.clone();
         let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
 
-        let mut available_moves = Vec::new();
-        for idx in 0..work_board.total_cells() {
-            if work_board.get_cell(idx).is_none() {
-                available_moves.push(idx);
-            }
-        }
-
-        // --- FIX STARTS HERE ---
-        // Sort by number of winning lines passing through the cell (Descending)
-        // This naturally prioritizes Center (13 lines) -> Corners (7 lines) -> etc.
-        available_moves.sort_by(|&a, &b| {
-            let val_a = work_board.get_strategic_value(a);
-            let val_b = work_board.get_strategic_value(b);
-            val_b.cmp(&val_a) // Descending order
-        });
-        // --- FIX ENDS HERE ---
+        // Get sorted moves
+        let available_moves = self.get_sorted_moves(&work_board);
 
         let opponent = match player {
             Player::X => Player::O,
@@ -129,7 +141,6 @@ impl MinimaxBot {
         };
 
         for &mv in &available_moves {
-            // ... (Rest of the loop remains identical) ...
             work_board.make_move(mv, player).unwrap();
             self.update_hashes(&mut rolling_hashes, mv, player);
 
@@ -147,16 +158,10 @@ impl MinimaxBot {
 
             let is_better = match player {
                 Player::X => score > best_score,
-                Player::O => {
-                    if best_score == i32::MIN && best_move.is_none() {
-                        true
-                    } else {
-                        score < best_score
-                    }
-                }
+                Player::O => score < best_score,
             };
 
-            if best_move.is_none() || is_better {
+            if is_better {
                 best_score = score;
                 best_move = Some(mv);
                 if player == Player::X {
@@ -210,81 +215,60 @@ impl MinimaxBot {
             Player::X => Player::O,
             Player::O => Player::X,
         };
-        let mut best_val;
 
-        match current_player {
-            Player::X => {
-                best_val = i32::MIN;
-                for idx in 0..board.total_cells() {
-                    if board.get_cell(idx).is_none() {
-                        board.make_move(idx, Player::X).unwrap();
-                        self.update_hashes(rolling_hashes, idx, Player::X);
+        // Get sorted moves for better alpha-beta cutoffs
+        let moves = self.get_sorted_moves(board);
 
-                        let val;
-                        // Optimized check: only check wins involving this new move
-                        if board.check_win_at(idx) == Some(Player::X) {
-                            val = 1000 - depth as i32;
-                        } else {
-                            val = self.minimax(
-                                board,
-                                depth + 1,
-                                opponent,
-                                alpha,
-                                beta,
-                                rolling_hashes,
-                            );
-                        }
+        let mut best_val = match current_player {
+            Player::X => i32::MIN,
+            Player::O => i32::MAX,
+        };
 
-                        board.clear_cell(idx);
-                        self.update_hashes(rolling_hashes, idx, Player::X);
+        for idx in moves {
+            board.make_move(idx, current_player).unwrap();
+            self.update_hashes(rolling_hashes, idx, current_player);
 
-                        best_val = best_val.max(val);
-                        alpha = alpha.max(val);
-                        if beta <= alpha {
-                            break;
-                        }
-                    }
+            let val = if board.check_win_at(idx) == Some(current_player) {
+                // Win detected at this move
+                match current_player {
+                    Player::X => 1000 - depth as i32,
+                    Player::O => -1000 + depth as i32,
                 }
-                if best_val == i32::MIN {
-                    best_val = 0;
+            } else {
+                self.minimax(
+                    board,
+                    depth + 1,
+                    opponent,
+                    alpha,
+                    beta,
+                    rolling_hashes,
+                )
+            };
+
+            board.clear_cell(idx);
+            self.update_hashes(rolling_hashes, idx, current_player);
+
+            match current_player {
+                Player::X => {
+                    best_val = best_val.max(val);
+                    alpha = alpha.max(val);
                 }
-            }
-            Player::O => {
-                best_val = i32::MAX;
-                for idx in 0..board.total_cells() {
-                    if board.get_cell(idx).is_none() {
-                        board.make_move(idx, Player::O).unwrap();
-                        self.update_hashes(rolling_hashes, idx, Player::O);
-
-                        let val;
-                        // Optimized check: only check wins involving this new move
-                        if board.check_win_at(idx) == Some(Player::O) {
-                            val = -1000 + depth as i32;
-                        } else {
-                            val = self.minimax(
-                                board,
-                                depth + 1,
-                                opponent,
-                                alpha,
-                                beta,
-                                rolling_hashes,
-                            );
-                        }
-
-                        board.clear_cell(idx);
-                        self.update_hashes(rolling_hashes, idx, Player::O);
-
-                        best_val = best_val.min(val);
-                        beta = beta.min(val);
-                        if beta <= alpha {
-                            break;
-                        }
-                    }
-                }
-                if best_val == i32::MAX {
-                    best_val = 0;
+                Player::O => {
+                    best_val = best_val.min(val);
+                    beta = beta.min(val);
                 }
             }
+
+            if beta <= alpha {
+                break;
+            }
+        }
+
+        // Handle case where no moves were evaluated (shouldn't happen if check_draw works)
+        if (current_player == Player::X && best_val == i32::MIN)
+            || (current_player == Player::O && best_val == i32::MAX)
+        {
+            best_val = 0;
         }
 
         let flag = if best_val <= alpha_orig {
@@ -308,7 +292,6 @@ impl MinimaxBot {
     fn evaluate(&self, board: &HyperBoard) -> i32 {
         let mut score = 0;
         match &board.winning_masks {
-            // FIX: Destructure structs correctly
             crate::bitboard::WinningMasks::Small { masks, .. } => {
                 let p1 = match board.p1 {
                     crate::bitboard::BitBoard::Small(b) => b,
@@ -336,7 +319,6 @@ impl MinimaxBot {
                     }
                 }
             }
-            // FIX: Destructure structs correctly
             crate::bitboard::WinningMasks::Medium { masks, .. } => {
                 let p1 = match board.p1 {
                     crate::bitboard::BitBoard::Medium(b) => b,
