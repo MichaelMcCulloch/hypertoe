@@ -64,6 +64,48 @@ impl MinimaxBot {
         }
     }
 
+    /// Scans the board for immediate wins or forced blocks.
+    /// Returns Some(index) if a move is critical, None if standard search is required.
+    fn search_win_threats(&self, board: &mut BitBoardState, player: Player) -> Option<usize> {
+        let opponent = player.opponent();
+        let mut blocking_move = None;
+
+        // Iterate through all cells to find immediate game-ending moves
+        for idx in 0..board.total_cells() {
+            if board.get_cell(idx).is_none() {
+                // 1. Check if WE can win immediately (Priority #1)
+                board.set_cell(idx, player).unwrap();
+                let is_win = match player {
+                    Player::X => board.p1.check_win_at(&board.winning_masks, idx),
+                    Player::O => board.p2.check_win_at(&board.winning_masks, idx),
+                };
+                board.clear_cell(idx);
+
+                if is_win {
+                    return Some(idx);
+                }
+
+                // 2. Check if OPPONENT can win immediately (Priority #2 - Forced Block)
+                // We only record the first block found. If we found a win above, we take that.
+                // If we haven't found a block yet, check for threat.
+                if blocking_move.is_none() {
+                    board.set_cell(idx, opponent).unwrap();
+                    let is_loss = match opponent {
+                        Player::X => board.p1.check_win_at(&board.winning_masks, idx),
+                        Player::O => board.p2.check_win_at(&board.winning_masks, idx),
+                    };
+                    board.clear_cell(idx);
+
+                    if is_loss {
+                        blocking_move = Some(idx);
+                    }
+                }
+            }
+        }
+
+        blocking_move
+    }
+
     fn initialize_rolling_hashes(&self, board: &BitBoardState) -> Vec<u64> {
         let handler = self.symmetries.as_ref().unwrap();
         let mut hashes = vec![0; handler.maps.len()];
@@ -86,8 +128,6 @@ impl MinimaxBot {
     }
 
     fn update_hashes(&self, hashes: &mut [u64], cell_idx: usize, player: Player, depth: usize) {
-        // If we are deep in the tree, we only care about the Identity hash (index 0).
-        // The cut-off must match your minimax logic (depth 4).
         let limit = if depth >= 4 { 1 } else { hashes.len() };
 
         let handler = self.symmetries.as_ref().unwrap();
@@ -96,7 +136,6 @@ impl MinimaxBot {
             Player::O => 1,
         };
 
-        // Only iterate up to the limit
         for i in 0..limit {
             let map = &handler.maps[i];
             let mapped_cell = map[cell_idx];
@@ -117,7 +156,6 @@ impl MinimaxBot {
             }
         }
 
-        // Sort the slice of valid moves
         let slice = &mut buffer[0..count];
         slice.sort_by(|&a, &b| self.strategic_values[b].cmp(&self.strategic_values[a]));
 
@@ -135,8 +173,6 @@ impl MinimaxBot {
     ) -> i32 {
         let alpha_orig = alpha;
 
-        // OPTIMIZATION: Only use full symmetry canonicalization at shallow depths.
-        // At deeper depths, just use the first hash (identity).
         let canonical_hash = if depth < 4 {
             self.get_canonical_hash_fast(rolling_hashes)
         } else {
@@ -337,6 +373,19 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
     fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
+        // --- PRE-SEARCH OPTIMIZATION ---
+        // Before starting heavy iterative deepening, check for immediate
+        // wins or immediate threats (moves we MUST block).
+        let mut check_board = board.clone();
+        if let Some(immediate_move) = self.search_win_threats(&mut check_board, player) {
+            println!(
+                "Bot found immediate strategic move (Win/Block): {}",
+                immediate_move
+            );
+            return Some(immediate_move);
+        }
+        // -------------------------------
+
         let mut move_buffer = [0usize; 128];
         let count = self.get_sorted_moves(board, &mut move_buffer);
         let mut available_moves = move_buffer[0..count].to_vec();
@@ -349,7 +398,6 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         }
 
         let original_max_depth = self.max_depth;
-
         let mut current_best_move_entry: Option<(usize, i32)> = None;
 
         for d in 1..=original_max_depth {
