@@ -50,10 +50,13 @@ impl MinimaxBot {
 
     pub fn get_best_move(&mut self, board: &HyperBoard, player: Player) -> Option<usize> {
         self.ensure_zobrist_initialized(board.cells.len());
-        // Clear TT because scores are relative to root_player
-        self.transposition_table.clear();
+        // Persistent memoization: Do NOT clear the table.
+        // self.transposition_table.clear();
         
-        let mut best_score = i32::MIN;
+        let mut best_score = match player {
+            Player::X => i32::MIN,
+            Player::O => i32::MAX,
+        };
         let mut best_move = None;
         let alpha = i32::MIN;
         let beta = i32::MAX;
@@ -81,15 +84,25 @@ impl MinimaxBot {
             let move_hash = current_hash ^ self.get_zobrist_key(mv, player);
 
             // Pass 'opponent' as current_player (it's their turn next)
-            // Pass 'player' as root_player
-            let score = self.minimax(&mut work_board, 0, false, opponent, player, alpha, beta, move_hash);
-
+            // We NO LONGER pass root_player, scoring is absolute (X+, O-)
+            let score = self.minimax(&mut work_board, 0, opponent, alpha, beta, move_hash);
+            
             // Unmake move
             work_board.cells[mv] = None;
             
-            if score > best_score {
-                best_score = score;
-                best_move = Some(mv);
+            match player {
+                Player::X => {
+                    if score > best_score {
+                        best_score = score;
+                        best_move = Some(mv);
+                    }
+                },
+                Player::O => {
+                    if score < best_score {
+                        best_score = score;
+                        best_move = Some(mv);
+                    }
+                }
             }
         }
         
@@ -116,23 +129,20 @@ impl MinimaxBot {
         &mut self,
         board: &mut HyperBoard,
         depth: usize,
-        is_maximizing: bool,
-        current_player: Player, // The player whose turn it is at this node
-        root_player: Player,    // The player we are optimizing for (The Bot)
+        current_player: Player, // The player whose turn it is
         mut alpha: i32,
         mut beta: i32,
         current_hash: u64,
     ) -> i32 {
         if let Some(winner) = board.check_win() {
-            return if winner == root_player {
-                1000 - depth as i32
-            } else {
-                -1000 + depth as i32
+            return match winner {
+                Player::X => 1000 - depth as i32,
+                Player::O => -1000 + depth as i32,
             };
         }
 
         if depth >= self.max_depth {
-            return self.evaluate(board, root_player);
+            return self.evaluate(board);
         }
         
         let is_full = board.cells.iter().all(|c| c.is_some());
@@ -150,81 +160,79 @@ impl MinimaxBot {
         };
 
         let result;
-        if is_maximizing {
-            // Maximizing Step (Bot's turn)
-            let mut max_eval = i32::MIN;
-            let len = board.cells.len();
-            for idx in 0..len {
-                if board.cells[idx].is_none() {
-                    board.cells[idx] = Some(current_player);
-                    let new_hash = current_hash ^ self.get_zobrist_key(idx, current_player);
-                    
-                    let eval = self.minimax(board, depth + 1, false, opponent, root_player, alpha, beta, new_hash);
-                    board.cells[idx] = None; // Undo
-                    
-                    max_eval = max_eval.max(eval);
-                    alpha = alpha.max(eval);
-                    if beta <= alpha {
-                        break;
+        match current_player {
+            Player::X => { // Maximizing
+                let mut max_eval = i32::MIN;
+                let len = board.cells.len();
+                for idx in 0..len {
+                    if board.cells[idx].is_none() {
+                        board.cells[idx] = Some(Player::X);
+                        let new_hash = current_hash ^ self.get_zobrist_key(idx, Player::X);
+                        
+                        let eval = self.minimax(board, depth + 1, opponent, alpha, beta, new_hash);
+                        board.cells[idx] = None; // Undo
+                        
+                        max_eval = max_eval.max(eval);
+                        alpha = alpha.max(eval);
+                        if beta <= alpha {
+                            break;
+                        }
                     }
                 }
-            }
-            result = max_eval;
-        } else {
-            // Minimizing Step (Opponent's turn)
-            let mut min_eval = i32::MAX;
-            let len = board.cells.len();
-            for idx in 0..len {
-                if board.cells[idx].is_none() {
-                    board.cells[idx] = Some(current_player); // current_player is opponent here
-                    let new_hash = current_hash ^ self.get_zobrist_key(idx, current_player);
-                    
-                    let eval = self.minimax(board, depth + 1, true, opponent, root_player, alpha, beta, new_hash);
-                    board.cells[idx] = None; // Undo
-                    
-                    min_eval = min_eval.min(eval);
-                    beta = beta.min(eval);
-                    if beta <= alpha {
-                        break;
+                result = max_eval;
+            },
+            Player::O => { // Minimizing
+                let mut min_eval = i32::MAX;
+                let len = board.cells.len();
+                for idx in 0..len {
+                    if board.cells[idx].is_none() {
+                        board.cells[idx] = Some(Player::O);
+                        let new_hash = current_hash ^ self.get_zobrist_key(idx, Player::O);
+                        
+                        let eval = self.minimax(board, depth + 1, opponent, alpha, beta, new_hash);
+                        board.cells[idx] = None; // Undo
+                        
+                        min_eval = min_eval.min(eval);
+                        beta = beta.min(eval);
+                        if beta <= alpha {
+                            break;
+                        }
                     }
                 }
+                result = min_eval;
             }
-            result = min_eval;
         }
         
         self.transposition_table.insert(current_hash, result);
         result
     }
 
-    fn evaluate(&self, board: &HyperBoard, player: Player) -> i32 {
+    fn evaluate(&self, board: &HyperBoard) -> i32 {
         let mut score = 0;
-        let opponent = match player {
-            Player::X => Player::O,
-            Player::O => Player::X,
-        };
-
+        // Evaluation is always relative to Player X (Positive for X, Negative for O)
+        
         for line in &board.winning_lines {
-            let mut my_count = 0;
-            let mut op_count = 0;
+            let mut x_count = 0;
+            let mut o_count = 0;
             
             for &idx in line {
                 match board.cells[idx] {
-                    Some(p) if p == player => my_count += 1,
-                    Some(p) if p == opponent => op_count += 1,
+                    Some(Player::X) => x_count += 1,
+                    Some(Player::O) => o_count += 1,
                     _ => {}
                 }
             }
 
-            if op_count == 0 {
-                if my_count == 2 { score += 10; }
-                else if my_count == 1 { score += 1; }
-            } else if my_count == 0 {
-                if op_count == 2 { score -= 10; }
-                else if op_count == 1 { score -= 1; }
+            if o_count == 0 {
+                if x_count == 2 { score += 10; }
+                else if x_count == 1 { score += 1; }
+            } else if x_count == 0 {
+                if o_count == 2 { score -= 10; }
+                else if o_count == 1 { score -= 1; }
             }
         }
         
         score
     }
-}
 
+}
