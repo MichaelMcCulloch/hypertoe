@@ -49,8 +49,8 @@ fn main() {
 
     let clock = SystemClock::new();
 
-    // Board generic param inference?
-    // We need to explicitly type the Board or let it infer from GameService.
+    
+    
     let board = Board::<BitBoardState>::new(dimension);
 
     let mut game = GameService::new(board, clock, player_x, player_o);

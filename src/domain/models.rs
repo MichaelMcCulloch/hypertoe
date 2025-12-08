@@ -22,9 +22,9 @@ pub enum GameResult {
     InProgress,
 }
 
-/// Trait defining the storage and core mechanics of the board backend.
-/// This allows us to strictly separate the "BitBoard" optimization (Infrastructure)
-/// from the "Board" concept (Domain).
+
+
+
 pub trait BoardState: Debug + Clone {
     fn new(dimension: usize) -> Self where Self: Sized;
     fn dimension(&self) -> usize;
@@ -37,8 +37,8 @@ pub trait BoardState: Debug + Clone {
     fn is_full(&self) -> bool;
 }
 
-/// The Domain Entity representing the Game Board.
-/// It wraps a BoardState implementation.
+
+
 #[derive(Clone, Debug)]
 pub struct Board<S: BoardState> {
     state: S,

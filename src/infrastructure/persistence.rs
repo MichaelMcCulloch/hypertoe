@@ -121,7 +121,7 @@ impl fmt::Display for BitBoardState {
     }
 }
 
-// --- BitBoard Implementation ---
+
 
 impl BitBoard {
     pub fn new_empty(dimension: usize, side: usize) -> Self {
@@ -265,7 +265,7 @@ impl BitBoard {
     }
 }
 
-// --- Mask Generation Logic ---
+
 
 fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
     let lines_indices = generate_winning_lines_indices(dimension, side);
@@ -432,7 +432,7 @@ fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
     Some(index)
 }
 
-// --- Intrinsics ---
+
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]

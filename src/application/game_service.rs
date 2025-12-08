@@ -5,7 +5,7 @@ use std::fmt::Display;
 pub struct GameService<'a, S: BoardState, C: Clock> {
     board: Board<S>,
     clock: C,
-    player_x: Box<dyn PlayerStrategy<S> + 'a>, // Boxing traits requires lifetime if they capture env?
+    player_x: Box<dyn PlayerStrategy<S> + 'a>, 
     player_o: Box<dyn PlayerStrategy<S> + 'a>,
     turn: Player,
 }
@@ -51,11 +51,11 @@ impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
                 Player::O => &mut self.player_o,
             };
 
-            // Assuming get_best_move is blocking for now
+            
             if let Some(move_idx) = strategy.get_best_move(self.board.state(), self.turn) {
                  match self.board.make_move(move_idx, self.turn) {
                      Ok(_) => {
-                         println!("{}", self.board.state()); // Display board
+                         println!("{}", self.board.state()); 
                          self.turn = self.turn.opponent();
                      }
                      Err(e) => println!("Error making move: {}", e),
