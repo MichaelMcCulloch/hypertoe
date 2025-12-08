@@ -85,16 +85,22 @@ impl MinimaxBot {
         hashes
     }
 
-    fn update_hashes(&self, hashes: &mut [u64], cell_idx: usize, player: Player) {
+    fn update_hashes(&self, hashes: &mut [u64], cell_idx: usize, player: Player, depth: usize) {
+        // If we are deep in the tree, we only care about the Identity hash (index 0).
+        // The cut-off must match your minimax logic (depth 4).
+        let limit = if depth >= 4 { 1 } else { hashes.len() };
+
         let handler = self.symmetries.as_ref().unwrap();
         let p_idx = match player {
             Player::X => 0,
             Player::O => 1,
         };
 
-        for (sym_idx, map) in handler.maps.iter().enumerate() {
+        // Only iterate up to the limit
+        for i in 0..limit {
+            let map = &handler.maps[i];
             let mapped_cell = map[cell_idx];
-            hashes[sym_idx] ^= self.zobrist_keys[mapped_cell][p_idx];
+            hashes[i] ^= self.zobrist_keys[mapped_cell][p_idx];
         }
     }
 
@@ -102,13 +108,20 @@ impl MinimaxBot {
         *hashes.iter().min().unwrap_or(&0)
     }
 
-    fn get_sorted_moves(&self, board: &BitBoardState) -> Vec<usize> {
-        let mut moves: Vec<usize> = (0..board.total_cells())
-            .filter(|&idx| board.get_cell(idx).is_none())
-            .collect();
+    fn get_sorted_moves(&self, board: &BitBoardState, buffer: &mut [usize]) -> usize {
+        let mut count = 0;
+        for idx in 0..board.total_cells() {
+            if board.get_cell(idx).is_none() {
+                buffer[count] = idx;
+                count += 1;
+            }
+        }
 
-        moves.sort_by(|&a, &b| self.strategic_values[b].cmp(&self.strategic_values[a]));
-        moves
+        // Sort the slice of valid moves
+        let slice = &mut buffer[0..count];
+        slice.sort_by(|&a, &b| self.strategic_values[b].cmp(&self.strategic_values[a]));
+
+        count
     }
 
     fn minimax(
@@ -179,7 +192,9 @@ impl MinimaxBot {
         self.stats.nodes_searched.fetch_add(1, Ordering::Relaxed);
 
         let opponent = current_player.opponent();
-        let mut moves = self.get_sorted_moves(board);
+        let mut move_buffer = [0usize; 128];
+        let count = self.get_sorted_moves(board, &mut move_buffer);
+        let moves = &mut move_buffer[0..count];
 
         if let Some(tm) = tt_move {
             if let Some(pos) = moves.iter().position(|&m| m == tm) {
@@ -193,10 +208,10 @@ impl MinimaxBot {
         };
         let mut best_move = None;
 
-        for idx in moves {
+        for &idx in moves.iter() {
             board.set_cell(idx, current_player).unwrap();
 
-            self.update_hashes(rolling_hashes, idx, current_player);
+            self.update_hashes(rolling_hashes, idx, current_player, depth);
 
             let win = board.p1.check_win_at(&board.winning_masks, idx)
                 || board.p2.check_win_at(&board.winning_masks, idx);
@@ -211,7 +226,7 @@ impl MinimaxBot {
             };
 
             board.clear_cell(idx);
-            self.update_hashes(rolling_hashes, idx, current_player);
+            self.update_hashes(rolling_hashes, idx, current_player, depth);
 
             match current_player {
                 Player::X => {
@@ -322,7 +337,9 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
     fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
-        let mut available_moves = self.get_sorted_moves(board);
+        let mut move_buffer = [0usize; 128];
+        let count = self.get_sorted_moves(board, &mut move_buffer);
+        let mut available_moves = move_buffer[0..count].to_vec();
         if available_moves.is_empty() {
             return None;
         }
@@ -351,7 +368,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                     let mut rolling_hashes = self.initialize_rolling_hashes(&work_board);
 
                     work_board.set_cell(mv, player).unwrap();
-                    self.update_hashes(&mut rolling_hashes, mv, player);
+                    self.update_hashes(&mut rolling_hashes, mv, player, 0);
 
                     let score = self.minimax(
                         &mut work_board,
