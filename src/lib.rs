@@ -2,6 +2,7 @@ use crate::bitboard::{BitBoard, WinningMasks};
 pub mod ai;
 pub mod game;
 pub mod bitboard;
+pub mod symmetries;
 mod display;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] // Added Hash

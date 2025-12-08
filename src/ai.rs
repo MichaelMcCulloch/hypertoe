@@ -1,26 +1,30 @@
+// src/ai.rs
 use crate::{HyperBoard, Player};
+use crate::symmetries::SymmetryHandler;
 use std::collections::HashMap;
 
-// 1. Define the types of values we can store
-#[derive(Clone, Copy, PartialEq)]
+// --- Transposition Table Types ---
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Flag {
-    Exact,
-    LowerBound, // Alpha (At most this score) - Note: Naming conventions vary, but usually Alpha failure = UpperBound of value
-    UpperBound, // Beta (At least this score)
+    Exact,      // The score is exact
+    LowerBound, // The score is >= val (Beta cutoff previously)
+    UpperBound, // The score is <= val (Alpha cutoff previously)
 }
 
-// 2. The entry to store in the Hash Map
 #[derive(Clone, Copy)]
 struct TranspositionEntry {
     score: i32,
-    depth: u8, // Using u8 to save space, standard depth won't exceed 255
+    depth: u8, // Store how deep we searched to get this result
     flag: Flag,
-    // Optional: best_move: Option<usize> (Good for move ordering later)
 }
+
+// --- Minimax Bot ---
 
 pub struct MinimaxBot {
     transposition_table: HashMap<u64, TranspositionEntry>,
-    zobrist_keys: Vec<[u64; 2]>,
+    zobrist_keys: Vec<[u64; 2]>, // [cell_idx][player_idx]
+    symmetries: Option<SymmetryHandler>,
     max_depth: usize,
 }
 
@@ -29,36 +33,39 @@ impl MinimaxBot {
         MinimaxBot {
             transposition_table: HashMap::new(),
             zobrist_keys: Vec::new(),
+            symmetries: None,
             max_depth,
         }
     }
     
-    fn ensure_zobrist_initialized(&mut self, size: usize) {
-        if self.zobrist_keys.len() < size {
-             let mut rng_state: u64 = 0xDEADBEEF + size as u64; 
+    // Initialize Zobrist keys and Symmetry maps lazily
+    fn ensure_initialized(&mut self, board: &HyperBoard) {
+        if self.zobrist_keys.len() < board.total_cells() {
+             let mut rng_state: u64 = 0xDEADBEEF + board.total_cells() as u64; 
              let mut next_rand = || -> u64 {
                  rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
                  rng_state
              };
-             self.zobrist_keys.resize_with(size, || [next_rand(), next_rand()]);
+             
+             self.zobrist_keys.resize_with(board.total_cells(), || [next_rand(), next_rand()]);
+        }
+        
+        if self.symmetries.is_none() {
+            self.symmetries = Some(SymmetryHandler::new(board.dimension, board.side));
         }
     }
 
     pub fn get_best_move(&mut self, board: &HyperBoard, player: Player) -> Option<usize> {
-        self.ensure_zobrist_initialized(board.total_cells());
-        // Clear table between moves if you want to save memory, 
-        // but keeping it makes the AI stronger over time (though memory heavier).
-        // self.transposition_table.clear(); 
-
+        self.ensure_initialized(board);
+        
         let mut best_score = i32::MIN;
         let mut best_move = None;
-        let mut alpha = i32::MIN + 1; // +1 buffer for safety
+        let mut alpha = i32::MIN + 1;
         let beta = i32::MAX - 1;
         
         let mut work_board = board.clone();
-        let current_hash = self.compute_hash(&work_board);
 
-        // Basic move ordering: check available cells
+        // Get all legal moves
         let mut available_moves = Vec::new();
         for idx in 0..work_board.total_cells() {
             if work_board.get_cell(idx).is_none() {
@@ -66,92 +73,99 @@ impl MinimaxBot {
             }
         }
         
-        // Optimization: Shuffle available_moves or heuristic sort here prevents worst-case complexity
+        // Optimization: Sort moves? (omitted for brevity, but helps pruning)
 
-        let opponent = match player {
-            Player::X => Player::O,
-            Player::O => Player::X,
-        };
+        let opponent = match player { Player::X => Player::O, Player::O => Player::X };
 
+        // Root Search
         for &mv in &available_moves {
             work_board.make_move(mv, player).unwrap();
-            let move_hash = current_hash ^ self.get_zobrist_key(mv, player);
-
-            // We are calling minimax for the opponent, so negate the result
-            // Note: Your original code had specific Player::X/O logic. 
-            // Standard minimax usually employs Negamax to simplify this, 
-            // but I will adapt your specific X/O maximizing/minimizing logic.
             
-            // However, your original root loop logic was slightly distinct from the recursive step.
-            // Let's align it. 
-            let score = self.minimax(&mut work_board, 0, opponent, alpha, beta, move_hash);
+            // Note: We don't pass a rolling hash here because the board changed 
+            // and we need to recalculate canonical hash inside anyway.
+            let score = self.minimax(&mut work_board, 0, opponent, alpha, beta);
             
             work_board.clear_cell(mv);
             
-            // X wants to Maximize, O wants to Minimize.
-            // But usually, get_best_move wants to find the best move for *Player*.
-            // So we always want the move that yields the 'best' score for 'Player'.
+            // Logic for the root player (We want to MAXIMIZE our score)
+            // Note: If player is O, the minimax returns a score from O's perspective?
+            // Actually, in the minimax below, I used Negamax-style or explicit logic?
+            // Let's look at the implementation below. It returns absolute score.
+            // X wants +ve, O wants -ve.
             
             let is_better = match player {
                 Player::X => score > best_score,
-                Player::O => score < best_score || best_score == i32::MIN, // Fix initialization for O
+                Player::O => {
+                     // For O, "Best" is the lowest score. 
+                     // But we initialize best_score to i32::MIN which is confusing.
+                     // Let's reset best_score based on player.
+                     if best_score == i32::MIN && best_move.is_none() { true }
+                     else { score < best_score }
+                }
             };
 
-            // Fix O's initial best_score logic in the loop
+            // Handling initialization for O
             if best_move.is_none() {
                 best_score = score;
                 best_move = Some(mv);
-            } else if match player { Player::X => score > best_score, Player::O => score < best_score } {
+            } else if is_better {
                 best_score = score;
                 best_move = Some(mv);
-                // Update Alpha/Beta at the root
+                
+                // Tighten bounds
                 if player == Player::X {
                     alpha = alpha.max(score);
                 } else {
-                    // This variable is actually beta for the root search if we were recursing
-                    // but locally here we just track best.
+                    // For O, we aren't tightening 'beta' for the loop, 
+                    // because alpha/beta in Minimax are usually "My Guaranteed Best" vs "Opponent's Best Counter".
+                    // But effectively, if we found a move that gives -10, we know we can get at least -10.
                 }
-            } else if score == best_score {
-                 // Keep your tie-breaker logic if desired, it is valid.
-                 // Omitting for brevity in this fix, but insert `does_move_block` here.
             }
         }
         
         best_move.or(available_moves.first().copied())
     }
 
-    fn compute_hash(&self, board: &HyperBoard) -> u64 {
-        let mut hash = 0;
-        for i in 0..board.total_cells() {
-            if let Some(p) = board.get_cell(i) {
-                hash ^= self.get_zobrist_key(i, p);
+    fn get_canonical_hash(&self, board: &HyperBoard) -> u64 {
+        let handler = self.symmetries.as_ref().unwrap();
+        let mut min_hash = u64::MAX;
+
+        // Iterate all symmetries to find the "Canonical" (smallest hash) view of the board
+        for map in &handler.maps {
+            let mut current_hash: u64 = 0;
+            for real_idx in 0..board.total_cells() {
+                if let Some(player) = board.get_cell(real_idx) {
+                    let sym_idx = map[real_idx];
+                    let p_idx = match player { Player::X => 0, Player::O => 1 };
+                    current_hash ^= self.zobrist_keys[sym_idx][p_idx];
+                }
+            }
+            if current_hash < min_hash {
+                min_hash = current_hash;
             }
         }
-        hash
-    }
-    
-    fn get_zobrist_key(&self, index: usize, player: Player) -> u64 {
-        let p_idx = match player { Player::X => 0, Player::O => 1 };
-        self.zobrist_keys[index][p_idx]
+        min_hash
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn minimax(
         &mut self,
         board: &mut HyperBoard,
         depth: usize,
-        current_player: Player,
+        current_player: Player, 
         mut alpha: i32,
         mut beta: i32,
-        current_hash: u64,
     ) -> i32 {
-        let alpha_orig = alpha; // Save original alpha for TT flag determination
-
-        // 1. Transposition Table Lookup
-        // We only use the cached value if the cached depth is >= what we plan to search
+        let alpha_orig = alpha;
+        
+        // 1. Calculate Hash & TT Lookup
+        // We calculate the hash of the board's CANONICAL form (lowest hash among all symmetries).
+        // This automatically handles all 384 rotations/reflections in 4D.
+        let canonical_hash = self.get_canonical_hash(board);
+        
+        // We only trust the cache if it searched at least as deep as we plan to go now.
         let remaining_depth = if self.max_depth > depth { (self.max_depth - depth) as u8 } else { 0 };
 
-        if let Some(entry) = self.transposition_table.get(&current_hash) {
+        if let Some(entry) = self.transposition_table.get(&canonical_hash) {
             if entry.depth >= remaining_depth {
                 match entry.flag {
                     Flag::Exact => return entry.score,
@@ -164,83 +178,64 @@ impl MinimaxBot {
             }
         }
 
-        // 2. Base Cases
+        // 2. Terminal Checks
         if let Some(winner) = board.check_win() {
-            // Adjust score by depth to prefer faster wins / slower losses
             return match winner {
                 Player::X => 1000 - depth as i32,
                 Player::O => -1000 + depth as i32,
             };
         }
-        
         if board.check_draw() {
              return 0;
         }
-
         if depth >= self.max_depth {
             return self.evaluate(board);
         }
 
-        let opponent = match current_player {
-            Player::X => Player::O,
-            Player::O => Player::X,
-        };
+        let opponent = match current_player { Player::X => Player::O, Player::O => Player::X };
+        let mut best_val;
 
-        let mut best_val; 
-
-        // 3. Recursion
+        // 3. Recursive Search
         match current_player {
             Player::X => { // Maximizing
                 best_val = i32::MIN;
-                // Move generation... in a real engine, you'd sort these using the TT's best_move if available
                 for idx in 0..board.total_cells() {
                     if board.get_cell(idx).is_none() {
                         board.make_move(idx, Player::X).unwrap();
-                        let new_hash = current_hash ^ self.get_zobrist_key(idx, Player::X);
-                        
-                        let val = self.minimax(board, depth + 1, opponent, alpha, beta, new_hash);
-                        
-                        board.clear_cell(idx); 
+                        let val = self.minimax(board, depth + 1, opponent, alpha, beta);
+                        board.clear_cell(idx);
                         
                         best_val = best_val.max(val);
                         alpha = alpha.max(val);
-                        if beta <= alpha {
-                            break; // Beta Cutoff
-                        }
+                        if beta <= alpha { break; } // Beta Cutoff
                     }
                 }
-                // Handle case where no moves exist but check_draw/check_win failed (shouldn't happen with correct logic)
-                if best_val == i32::MIN { best_val = 0; } 
+                if best_val == i32::MIN { best_val = 0; } // Should only happen on draw, handled above
             },
             Player::O => { // Minimizing
                 best_val = i32::MAX;
                 for idx in 0..board.total_cells() {
                     if board.get_cell(idx).is_none() {
                         board.make_move(idx, Player::O).unwrap();
-                        let new_hash = current_hash ^ self.get_zobrist_key(idx, Player::O);
-                        
-                        let val = self.minimax(board, depth + 1, opponent, alpha, beta, new_hash);
-                        
-                        board.clear_cell(idx); 
+                        let val = self.minimax(board, depth + 1, opponent, alpha, beta);
+                        board.clear_cell(idx);
                         
                         best_val = best_val.min(val);
                         beta = beta.min(val);
-                        if beta <= alpha {
-                            break; // Alpha Cutoff
-                        }
+                        if beta <= alpha { break; } // Alpha Cutoff
                     }
                 }
                 if best_val == i32::MAX { best_val = 0; }
             }
         }
         
-        // 4. Store in Transposition Table
+        // 4. Store in TT
         let flag = if best_val <= alpha_orig {
-            Flag::UpperBound // We failed low, so the true value is at most alpha
+            Flag::UpperBound
         } else if best_val >= beta {
-            Flag::LowerBound // We failed high, so the true value is at least beta
+            Flag::LowerBound
         } else {
-            Flag::Exact // We found a value between alpha and beta
+            Flag::Exact
         };
 
         let entry = TranspositionEntry {
@@ -249,7 +244,7 @@ impl MinimaxBot {
             flag,
         };
         
-        self.transposition_table.insert(current_hash, entry);
+        self.transposition_table.insert(canonical_hash, entry);
 
         best_val
     }
@@ -257,56 +252,36 @@ impl MinimaxBot {
     fn evaluate(&self, board: &HyperBoard) -> i32 {
         let mut score = 0;
         
+        // Optimized evaluation using bitmasks from board
         match &board.winning_masks {
             crate::bitboard::WinningMasks::Small(masks) => {
-                let p1_board = match board.p1 { crate::bitboard::BitBoard::Small(b) => b, _ => 0 };
-                let p2_board = match board.p2 { crate::bitboard::BitBoard::Small(b) => b, _ => 0 };
-                
+                let p1 = match board.p1 { crate::bitboard::BitBoard::Small(b) => b, _ => 0 };
+                let p2 = match board.p2 { crate::bitboard::BitBoard::Small(b) => b, _ => 0 };
                 for &mask in masks {
-                    let x_count = (p1_board & mask).count_ones();
-                    let o_count = (p2_board & mask).count_ones();
-                    
-                    if o_count == 0 {
-                        if x_count == 2 { score += 10; }
-                        else if x_count == 1 { score += 1; }
-                    } else if x_count == 0 {
-                        if o_count == 2 { score -= 10; }
-                        else if o_count == 1 { score -= 1; }
+                    let x = (p1 & mask).count_ones();
+                    let o = (p2 & mask).count_ones();
+                    if o == 0 {
+                        if x == 2 { score += 10; } else if x == 1 { score += 1; }
+                    } else if x == 0 {
+                        if o == 2 { score -= 10; } else if o == 1 { score -= 1; }
                     }
                 }
             },
             crate::bitboard::WinningMasks::Medium(masks) => {
-                let p1_board = match board.p1 { crate::bitboard::BitBoard::Medium(b) => b, _ => 0 };
-                let p2_board = match board.p2 { crate::bitboard::BitBoard::Medium(b) => b, _ => 0 };
-                
+                let p1 = match board.p1 { crate::bitboard::BitBoard::Medium(b) => b, _ => 0 };
+                let p2 = match board.p2 { crate::bitboard::BitBoard::Medium(b) => b, _ => 0 };
                 for &mask in masks {
-                    let x_count = (p1_board & mask).count_ones();
-                    let o_count = (p2_board & mask).count_ones();
-                    
-                    if o_count == 0 {
-                        if x_count == 2 { score += 10; }
-                        else if x_count == 1 { score += 1; }
-                    } else if x_count == 0 {
-                        if o_count == 2 { score -= 10; }
-                        else if o_count == 1 { score -= 1; }
+                    let x = (p1 & mask).count_ones();
+                    let o = (p2 & mask).count_ones();
+                    if o == 0 {
+                        if x == 2 { score += 10; } else if x == 1 { score += 1; }
+                    } else if x == 0 {
+                        if o == 2 { score -= 10; } else if o == 1 { score -= 1; }
                     }
                 }
             },
             _ => {}
         }
-        
         score
-    }
-    
-    // Helper for manual blocking check - kept from your original code if needed
-    fn does_move_block(&self, board: &HyperBoard, mv: usize, player: Player) -> bool {
-        let opponent = match player { Player::X => Player::O, Player::O => Player::X };
-        let mut test_board = board.clone();
-        if test_board.make_move(mv, opponent).is_ok() {
-            if test_board.check_win() == Some(opponent) {
-                return true;
-            }
-        }
-        false
     }
 }
