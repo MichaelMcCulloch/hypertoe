@@ -1,7 +1,9 @@
 
+pub mod ai;
+pub mod game;
 mod display;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] // Added Hash
 pub enum Player {
     X,
     O,
@@ -9,6 +11,7 @@ pub enum Player {
 
 use std::fmt;
 
+#[derive(Clone)]
 pub struct HyperBoard {
     pub dimension: usize,
     pub cells: Vec<Option<Player>>,
@@ -225,7 +228,13 @@ impl HyperBoard {
         }
         None
     }
+
+    pub fn check_draw(&self) -> bool {
+        self.cells.iter().all(|c| c.is_some()) && self.check_win().is_none()
+    }
 }
+
+
 
 #[cfg(test)]
 mod tests {

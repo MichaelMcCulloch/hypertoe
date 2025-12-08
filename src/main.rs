@@ -1,21 +1,32 @@
-use hypertictactoe::HyperBoard;
+use hypertictactoe::game::{Game, PlayerType};
+use std::env;
 
 fn main() {
-    println!("N-Dimensional Tic-Tac-Toe");
+    let args: Vec<String> = env::args().collect();
     
-    for dim in 2..=6 {
-        let mut board = HyperBoard::new(dim);
-        println!("Dimension: {}, Side: {}, Winning Lines: {}", 
-            board.dimension, board.side, board.winning_lines.len());
-            
-        // Make some dummy moves to show something
-        if dim == 2 {
-            let _ = board.make_move(0, hypertictactoe::Player::X);
-            let _ = board.make_move(4, hypertictactoe::Player::O);
-            let _ = board.make_move(8, hypertictactoe::Player::X);
+    // Default config
+    let mut dimension = 3;
+    let mut player_x = PlayerType::Human;
+    let mut player_o = PlayerType::CPU;
+
+    // Simple arg parsing
+    // Usage: cargo run -- [dim] [mode]
+    // mode: hh, hc, ch, cc
+    if args.len() > 1 {
+        if let Ok(d) = args[1].parse::<usize>() {
+            dimension = d;
         }
-        
-        println!("{}", board);
-        println!("----------------------------------------");
     }
+    if args.len() > 2 {
+        match args[2].as_str() {
+            "hh" => { player_x = PlayerType::Human; player_o = PlayerType::Human; },
+            "hc" => { player_x = PlayerType::Human; player_o = PlayerType::CPU; },
+            "ch" => { player_x = PlayerType::CPU; player_o = PlayerType::Human; },
+            "cc" => { player_x = PlayerType::CPU; player_o = PlayerType::CPU; },
+            _ => println!("Unknown mode, defaulting to Human vs CPU"),
+        }
+    }
+
+    let mut game = Game::new(dimension, player_x, player_o);
+    game.start();
 }
