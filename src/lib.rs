@@ -1,6 +1,7 @@
-
+use crate::bitboard::{BitBoard, WinningMasks};
 pub mod ai;
 pub mod game;
+pub mod bitboard;
 mod display;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] // Added Hash
@@ -14,9 +15,11 @@ use std::fmt;
 #[derive(Clone)]
 pub struct HyperBoard {
     pub dimension: usize,
-    pub cells: Vec<Option<Player>>,
-    pub winning_lines: Vec<Vec<usize>>,
-    pub side: usize, // Currently hardcoded to 3
+    pub p1: BitBoard,
+    pub p2: BitBoard,
+    pub winning_masks: WinningMasks,
+    pub side: usize,
+    total_cells: usize,
 }
 
 impl fmt::Display for HyperBoard {
@@ -29,40 +32,89 @@ impl fmt::Display for HyperBoard {
 impl HyperBoard {
     pub fn new(dimension: usize) -> Self {
         let side: usize = 3;
-        let num_cells = side.pow(dimension as u32);
-        let cells = vec![None; num_cells];
-        let winning_lines = Self::generate_winning_lines(dimension, side);
+        let total_cells = side.pow(dimension as u32);
+        
+        let p1 = BitBoard::new(dimension, side);
+        let p2 = BitBoard::new(dimension, side);
+        
+        let winning_masks = Self::generate_winning_masks(dimension, side);
 
         HyperBoard {
             dimension,
-            cells,
-            winning_lines,
+            p1,
+            p2,
+            winning_masks,
             side,
+            total_cells,
+        }
+    }
+    
+    pub fn total_cells(&self) -> usize {
+        self.total_cells
+    }
+    
+    pub fn get_cell(&self, index: usize) -> Option<Player> {
+        if self.p1.get_bit(index) {
+            Some(Player::X)
+        } else if self.p2.get_bit(index) {
+            Some(Player::O)
+        } else {
+            None
+        }
+    }
+    
+    pub fn clear_cell(&mut self, index: usize) {
+        self.p1.clear_bit(index);
+        self.p2.clear_bit(index);
+    }
+
+    fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
+        // Reuse old logic to get lines as indices
+        let lines_indices = Self::generate_winning_lines_indices(dimension, side);
+        
+        let total_cells = side.pow(dimension as u32);
+        
+        if total_cells <= 32 {
+            let mut masks = Vec::new();
+            for line in lines_indices {
+                let mut mask: u32 = 0;
+                for idx in line {
+                    mask |= 1 << idx;
+                }
+                masks.push(mask);
+            }
+            WinningMasks::Small(masks)
+        } else if total_cells <= 128 {
+             let mut masks = Vec::new();
+            for line in lines_indices {
+                let mut mask: u128 = 0;
+                for idx in line {
+                    mask |= 1 << idx;
+                }
+                masks.push(mask);
+            }
+            WinningMasks::Medium(masks)
+        } else {
+            let mut masks = Vec::new();
+            let num_u64s = (total_cells + 63) / 64;
+            for line in lines_indices {
+                let mut mask_chunks = vec![0u64; num_u64s];
+                for idx in line {
+                    let vec_idx = idx / 64;
+                    let bit_idx = idx % 64;
+                    mask_chunks[vec_idx] |= 1 << bit_idx;
+                }
+                masks.push(mask_chunks);
+            }
+            WinningMasks::Large(masks)
         }
     }
 
-    fn generate_winning_lines(dimension: usize, side: usize) -> Vec<Vec<usize>> {
+    fn generate_winning_lines_indices(dimension: usize, side: usize) -> Vec<Vec<usize>> {
         let mut lines = Vec::new();
-        
-        // A line is defined by a start position and a direction vector.
-        // The direction vector has components in {-1, 0, 1}.
-        // Not all zeros.
-        // We can iterate through all cells as potential starting points.
-        // And iterate through all 3^N - 1 directions.
-        // But more efficiently:
-        // A line exists if we can take `side - 1` steps in a specific direction 
-        // and stay within bounds.
-        
-        // Let's model coordinates as Vec<usize>.
-        // Direction as Vec<isize>.
-        
-        // To avoid duplicates (e.g. forward vs backward), we can enforce a
-        // "canonical" direction. e.g. the first non-zero component must be positive.
-        
         let all_directions = Self::get_canonical_directions(dimension);
         
         for dir in all_directions {
-            // For a given direction, find all valid start positions.
             let valid_starts = Self::get_valid_starts(dimension, side, &dir);
             for start in valid_starts {
                 let mut line = Vec::new();
@@ -76,12 +128,7 @@ impl HyperBoard {
                         // Move to next
                         for (i, d) in dir.iter().enumerate() {
                             let next_val = current[i] as isize + d;
-                            if next_val < 0 || next_val >= side as isize {
-                                // This check handles the boundary, though get_valid_starts 
-                                // should theoretically prevent starting where we can't finish.
-                                // But inside the loop we need to update `current`.
-                            }
-                            current[i] = next_val as usize;
+                            current[i] = next_val as usize; // Assumes valid start makes this safe-ish
                         }
                     } else {
                         valid = false;
@@ -94,7 +141,6 @@ impl HyperBoard {
                 }
             }
         }
-        
         lines
     }
 
@@ -116,20 +162,10 @@ impl HyperBoard {
                     2 => -1,
                     _ => unreachable!(),
                 };
-                
-                // We generate in reverse order effectively, but order doesn't matter for the set.
-                // However to check canonical:
-                // Let's treat the vector as d_0, d_1, ... 
-                // We want the first non-zero element to be +1.
-                // Wait, simply iterating 0..3^N includes all.
-                // We want to avoid 0,0,...0
-                // And we want to avoid v and -v being counted twice.
-                
                 dir.push(val);
             }
             
             // Re-check canonical property on the generated vector
-            // Find first non-zero
             for &val in &dir {
                 if val != 0 {
                     has_nonzero = true;
@@ -148,12 +184,6 @@ impl HyperBoard {
     }
     
     fn get_valid_starts(dimension: usize, side: usize, dir: &[isize]) -> Vec<Vec<usize>> {
-        // Iterate all cells. A cell is a valid start if:
-        // cell + (side-1)*dir is within bounds.
-        // Since we only maintain canonical directions (first non-zero is +),
-        // we mainly worry about upper bounds for + components and lower bounds for - components.
-        
-        // Actually, easiest is just Iterate all coords, check if end is in bounds.
         let num_cells = side.pow(dimension as u32);
         let mut starts = Vec::new();
 
@@ -200,40 +230,45 @@ impl HyperBoard {
     }
 
     pub fn make_move(&mut self, index: usize, player: Player) -> Result<(), String> {
-        if index >= self.cells.len() {
+        if index >= self.total_cells {
             return Err("Index out of bounds".to_string());
         }
-        if self.cells[index].is_some() {
+        if self.p1.get_bit(index) || self.p2.get_bit(index) {
             return Err("Cell already occupied".to_string());
         }
-        self.cells[index] = Some(player);
+        
+        match player {
+            Player::X => self.p1.set_bit(index),
+            Player::O => self.p2.set_bit(index),
+        }
         Ok(())
     }
 
     pub fn check_win(&self) -> Option<Player> {
-        for line in &self.winning_lines {
-            let first_idx = line[0];
-            if let Some(first_p) = self.cells[first_idx] {
-                let mut all_match = true;
-                for &idx in &line[1..] {
-                    if self.cells[idx] != Some(first_p) {
-                        all_match = false;
-                        break;
-                    }
-                }
-                if all_match {
-                    return Some(first_p);
-                }
-            }
+        // SIMD Optimized check
+        if self.p1.check_win(&self.winning_masks) {
+            return Some(Player::X);
+        }
+        if self.p2.check_win(&self.winning_masks) {
+            return Some(Player::O);
         }
         None
     }
 
     pub fn check_draw(&self) -> bool {
-        self.cells.iter().all(|c| c.is_some()) && self.check_win().is_none()
+        // Check if full.
+        // Counting bits would require popcount.
+        // Iterating is safer for now or adding popcount to BitBoard.
+        // Or simply: total_cells calls to get_bit? Slow.
+        // Add `is_full` to BitBoard?
+        // Fallback:
+        // Or we can track move count in Game?
+        // Let's implement an imperfect check: verify all cells are occupied.
+        // Efficiency: (p1 | p2).popcount() == total_cells?
+        // For now, simple loop:
+        (0..self.total_cells).all(|i| self.p1.get_bit(i) || self.p2.get_bit(i)) && self.check_win().is_none()
     }
 }
-
 
 
 #[cfg(test)]
@@ -243,31 +278,37 @@ mod tests {
     #[test]
     fn test_2d_lines_count() {
         let board = HyperBoard::new(2);
-        // (5^2 - 3^2)/2 = (25 - 9)/2 = 8
-        assert_eq!(board.winning_lines.len(), 8);
+        // (5^2 - 3^2)/2 = 8
+        match board.winning_masks {
+            WinningMasks::Small(masks) => assert_eq!(masks.len(), 8),
+            _ => panic!("Wrong mask type"),
+        }
     }
     
     #[test]
     fn test_3d_lines_count() {
         let board = HyperBoard::new(3);
-        // (5^3 - 3^3)/2 = (125 - 27)/2 = 98/2 = 49
-        assert_eq!(board.winning_lines.len(), 49);
+        // 49
+         match board.winning_masks {
+            WinningMasks::Small(masks) => assert_eq!(masks.len(), 49),
+            _ => panic!("Wrong mask type"),
+        }
     }
     
     #[test]
     fn test_4d_lines_count() {
         let board = HyperBoard::new(4);
-        // (5^4 - 3^4)/2 = (625 - 81)/2 = 544/2 = 272
-        assert_eq!(board.winning_lines.len(), 272);
+        // 272
+         match board.winning_masks {
+            WinningMasks::Medium(masks) => assert_eq!(masks.len(), 272),
+            _ => panic!("Wrong mask type"),
+        }
     }
 
 
     #[test]
     fn test_win_detection() {
         let mut board = HyperBoard::new(2);
-        // X X X
-        // . . .
-        // . . .
         board.make_move(0, Player::X).unwrap();
         board.make_move(1, Player::X).unwrap();
         board.make_move(2, Player::X).unwrap();
@@ -277,16 +318,9 @@ mod tests {
     #[test]
     fn test_diagonal_win_20_11_02() {
         let mut board = HyperBoard::new(2);
-        // . . X  (2)
-        // . X .  (4)
-        // X . .  (6)
         board.make_move(2, Player::X).unwrap();
         board.make_move(4, Player::X).unwrap();
         board.make_move(6, Player::X).unwrap();
-        
-        // Debug print lines if needed
-        // println!("Lines: {:?}", board.winning_lines);
-        
         assert_eq!(board.check_win(), Some(Player::X));
     }
 }

@@ -9,25 +9,6 @@ pub struct MinimaxBot {
 
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
-        // Initialize Zobrist keys with a simple LCG to avoid dependencies
-
-        
-        // We might need keys for up to N=6 or whatever max is supported.
-        // But the bot is instantiated per game? No, per move technically in main loop it's part of Game struct.
-        // Game creates bot with fixed max depth, but board size depends on dimension.
-        // The bot doesn't know the board size until it sees it.
-        // Or we can resize dynamically.
-        // For simplicity, let's just make it grow lazily or initialize large enough.
-        // But `HyperBoard` size scales exponentially.
-        // Better: Initialize it when first called or just passing dimension to new?
-        // Passed `dimension` to `HyperBoard`, but here we don't know it.
-        // Let's assume we initialize it large (e.g. 1000) or check in `get_best_move`.
-        // Actually, easiest is to lazy init or refactor `new` to take dimension/size.
-        // But Game creates it with just depth.
-        // I will make `zobrist_keys` empty initially and populate on first use if needed, 
-        // or just accept re-init cost if I change signature.
-        // Changing `new` signature is cleanest since `Game` knows dimension.
-        
         MinimaxBot {
             transposition_table: HashMap::new(),
             zobrist_keys: Vec::new(),
@@ -49,9 +30,7 @@ impl MinimaxBot {
     }
 
     pub fn get_best_move(&mut self, board: &HyperBoard, player: Player) -> Option<usize> {
-        self.ensure_zobrist_initialized(board.cells.len());
-        // Persistent memoization: Do NOT clear the table.
-        // self.transposition_table.clear();
+        self.ensure_zobrist_initialized(board.total_cells());
         
         let mut best_score = match player {
             Player::X => i32::MIN,
@@ -67,8 +46,9 @@ impl MinimaxBot {
         let current_hash = self.compute_hash(&work_board);
 
         let mut available_moves = Vec::new();
-        for (idx, cell) in work_board.cells.iter().enumerate() {
-            if cell.is_none() {
+        // Updated loop
+        for idx in 0..work_board.total_cells() {
+            if work_board.get_cell(idx).is_none() {
                 available_moves.push(idx);
             }
         }
@@ -80,15 +60,13 @@ impl MinimaxBot {
 
         for &mv in &available_moves {
             // Make move
-            work_board.cells[mv] = Some(player);
+            work_board.make_move(mv, player).unwrap(); // Should be safe
             let move_hash = current_hash ^ self.get_zobrist_key(mv, player);
 
-            // Pass 'opponent' as current_player (it's their turn next)
-            // We NO LONGER pass root_player, scoring is absolute (X+, O-)
             let score = self.minimax(&mut work_board, 0, opponent, alpha, beta, move_hash);
             
-            // Unmake move
-            work_board.cells[mv] = None;
+            // Unmake move - needs clear_cell
+            work_board.clear_cell(mv);
             
             match player {
                 Player::X => {
@@ -111,9 +89,9 @@ impl MinimaxBot {
     
     fn compute_hash(&self, board: &HyperBoard) -> u64 {
         let mut hash = 0;
-        for (i, cell) in board.cells.iter().enumerate() {
-            if let Some(p) = cell {
-                hash ^= self.get_zobrist_key(i, *p);
+        for i in 0..board.total_cells() {
+            if let Some(p) = board.get_cell(i) {
+                hash ^= self.get_zobrist_key(i, p);
             }
         }
         hash
@@ -145,9 +123,14 @@ impl MinimaxBot {
             return self.evaluate(board);
         }
         
-        let is_full = board.cells.iter().all(|c| c.is_some());
-        if is_full {
-            return 0;
+        // is_full check?
+        // Can check if moves available or expensive is_full in board
+        // Let's rely on move generation: if no moves, draw (return 0)
+        
+        // But need to know if it's a draw vs just max depth.
+        // check_draw is O(N).
+        if board.check_draw() {
+             return 0;
         }
 
         if let Some(&score) = self.transposition_table.get(&current_hash) {
@@ -163,14 +146,13 @@ impl MinimaxBot {
         match current_player {
             Player::X => { // Maximizing
                 let mut max_eval = i32::MIN;
-                let len = board.cells.len();
-                for idx in 0..len {
-                    if board.cells[idx].is_none() {
-                        board.cells[idx] = Some(Player::X);
+                for idx in 0..board.total_cells() {
+                    if board.get_cell(idx).is_none() {
+                        board.make_move(idx, Player::X).unwrap();
                         let new_hash = current_hash ^ self.get_zobrist_key(idx, Player::X);
                         
                         let eval = self.minimax(board, depth + 1, opponent, alpha, beta, new_hash);
-                        board.cells[idx] = None; // Undo
+                        board.clear_cell(idx); // Undo
                         
                         max_eval = max_eval.max(eval);
                         alpha = alpha.max(eval);
@@ -179,18 +161,19 @@ impl MinimaxBot {
                         }
                     }
                 }
-                result = max_eval;
+                // If no moves made and not win, it's a draw, handled above?
+                // If max_eval is still MIN (no moves), then it's a draw -> 0
+                if max_eval == i32::MIN { result = 0; } else { result = max_eval; }
             },
             Player::O => { // Minimizing
                 let mut min_eval = i32::MAX;
-                let len = board.cells.len();
-                for idx in 0..len {
-                    if board.cells[idx].is_none() {
-                        board.cells[idx] = Some(Player::O);
+                for idx in 0..board.total_cells() {
+                    if board.get_cell(idx).is_none() {
+                         board.make_move(idx, Player::O).unwrap();
                         let new_hash = current_hash ^ self.get_zobrist_key(idx, Player::O);
                         
                         let eval = self.minimax(board, depth + 1, opponent, alpha, beta, new_hash);
-                        board.cells[idx] = None; // Undo
+                         board.clear_cell(idx); // Undo
                         
                         min_eval = min_eval.min(eval);
                         beta = beta.min(eval);
@@ -199,7 +182,7 @@ impl MinimaxBot {
                         }
                     }
                 }
-                result = min_eval;
+                if min_eval == i32::MAX { result = 0; } else { result = min_eval; }
             }
         }
         
@@ -209,26 +192,56 @@ impl MinimaxBot {
 
     fn evaluate(&self, board: &HyperBoard) -> i32 {
         let mut score = 0;
-        // Evaluation is always relative to Player X (Positive for X, Negative for O)
+        // This is tricky: we removed winning_lines from public API.
+        // We have winning_masks.
+        // Evaluating partial lines with bitmasks is harder than with vectors of indices unless we keep indices.
+        // The current implementation of evaluate iterates winning_lines.
         
-        for line in &board.winning_lines {
-            let mut x_count = 0;
-            let mut o_count = 0;
-            
-            for &idx in line {
-                match board.cells[idx] {
-                    Some(Player::X) => x_count += 1,
-                    Some(Player::O) => o_count += 1,
-                    _ => {}
+        // Option A: Re-expose winning_lines_indices?
+        // Option B: Implement evaluate using bitwise ops (count set bits in masks).
+        // (board & mask).popcount() -> how many X or O in that line.
+        
+        // Option B is much faster!
+        
+        match &board.winning_masks {
+            crate::bitboard::WinningMasks::Small(masks) => {
+                let p1_board = match board.p1 { crate::bitboard::BitBoard::Small(b) => b, _ => 0 };
+                let p2_board = match board.p2 { crate::bitboard::BitBoard::Small(b) => b, _ => 0 };
+                
+                for &mask in masks {
+                    let x_count = (p1_board & mask).count_ones();
+                    let o_count = (p2_board & mask).count_ones();
+                    
+                    if o_count == 0 {
+                        if x_count == 2 { score += 10; }
+                        else if x_count == 1 { score += 1; }
+                    } else if x_count == 0 {
+                        if o_count == 2 { score -= 10; }
+                        else if o_count == 1 { score -= 1; }
+                    }
                 }
-            }
-
-            if o_count == 0 {
-                if x_count == 2 { score += 10; }
-                else if x_count == 1 { score += 1; }
-            } else if x_count == 0 {
-                if o_count == 2 { score -= 10; }
-                else if o_count == 1 { score -= 1; }
+            },
+            crate::bitboard::WinningMasks::Medium(masks) => {
+                let p1_board = match board.p1 { crate::bitboard::BitBoard::Medium(b) => b, _ => 0 };
+                let p2_board = match board.p2 { crate::bitboard::BitBoard::Medium(b) => b, _ => 0 };
+                
+                for &mask in masks {
+                    let x_count = (p1_board & mask).count_ones();
+                    let o_count = (p2_board & mask).count_ones();
+                    
+                    if o_count == 0 {
+                        if x_count == 2 { score += 10; }
+                        else if x_count == 1 { score += 1; }
+                    } else if x_count == 0 {
+                        if o_count == 2 { score -= 10; }
+                        else if o_count == 1 { score -= 1; }
+                    }
+                }
+            },
+            _ => {
+                 // Fallback or ignore for Large
+                 // Without easy iteration over lines, we skip heuristiceval for N>=5 or implement generic.
+                 // For now, return 0 or maybe basic material count?
             }
         }
         

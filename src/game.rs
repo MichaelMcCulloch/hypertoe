@@ -81,7 +81,7 @@ impl Game {
 
     fn get_human_move(&self) -> usize {
         loop {
-            print!("Enter move index (0-{}): ", self.board.cells.len() - 1);
+            print!("Enter move index (0-{}): ", self.board.total_cells() - 1);
             io::stdout().flush().unwrap();
 
             let mut input = String::new();

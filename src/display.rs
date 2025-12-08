@@ -88,7 +88,7 @@ fn draw_recursive(
         for dy in 0..3 {
             for dx in 0..3 {
                 let cell_idx = base_index + dx + dy * side;
-                let s = match board.cells[cell_idx] {
+                let s = match board.get_cell(cell_idx) {
                     Some(Player::X) => format!("{}X{}", COLOR_X, COLOR_RESET),
                     Some(Player::O) => format!("{}O{}", COLOR_O, COLOR_RESET),
                     None => format!("{}.{}", COLOR_DIM, COLOR_RESET),
