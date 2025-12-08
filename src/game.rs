@@ -1,5 +1,5 @@
-use crate::{HyperBoard, Player};
 use crate::ai::MinimaxBot;
+use crate::{HyperBoard, Player};
 use std::io::{self, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,7 +28,10 @@ impl Game {
     }
 
     pub fn start(&mut self) {
-        println!("Starting N-Dimensional Tic-Tac-Toe (Dim: {})", self.board.dimension);
+        println!(
+            "Starting N-Dimensional Tic-Tac-Toe (Dim: {})",
+            self.board.dimension
+        );
         println!("X: {:?} | O: {:?}", self.player_x, self.player_o);
         println!("{}", self.board);
 
@@ -42,8 +45,12 @@ impl Game {
                 break;
             }
 
-            println!("Player {:?}'s turn ({:?})", self.turn, self.current_player_type());
-            
+            println!(
+                "Player {:?}'s turn ({:?})",
+                self.turn,
+                self.current_player_type()
+            );
+
             let move_idx = match self.current_player_type() {
                 PlayerType::Human => self.get_human_move(),
                 PlayerType::CPU => {
@@ -86,9 +93,9 @@ impl Game {
 
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
-            
-            // Should properly parse coordinates too maybe? 
-            // For now, raw index is easiest for debugging, 
+
+            // Should properly parse coordinates too maybe?
+            // For now, raw index is easiest for debugging,
             // but for user UX, maybe x,y,z is better?
             // Let's stick to raw index for MVP as requested.
             match input.trim().parse::<usize>() {

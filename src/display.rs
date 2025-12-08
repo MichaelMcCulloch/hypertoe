@@ -44,46 +44,50 @@ pub fn render_board(board: &HyperBoard) -> String {
     // Determine size
     let (w, h) = calculate_size(board.dimension);
     let mut canvas = Canvas::new(w, h);
-    
+
     // Recursive draw
     draw_recursive(board, board.dimension, &mut canvas, 0, 0, 0);
-    
+
     canvas.to_string()
 }
 
 fn calculate_size(dim: usize) -> (usize, usize) {
-    if dim == 0 { return (1, 1); }
-    if dim == 1 { return (3, 1); }
-    
+    if dim == 0 {
+        return (1, 1);
+    }
+    if dim == 1 {
+        return (3, 1);
+    }
+
     if dim == 2 {
         // 2D: X X X
         // 5 width, 3 height
         return (5, 3);
     }
-    
+
     let (child_w, child_h) = calculate_size(dim - 1);
-    
+
     if dim % 2 != 0 {
         // Horizontal
-        let gap = 2; 
+        let gap = 2;
         (child_w * 3 + gap * 2, child_h)
     } else {
         // Vertical
-        let gap = 1; 
+        let gap = 1;
         (child_w, child_h * 3 + gap * 2)
     }
 }
 
 fn draw_recursive(
-    board: &HyperBoard, 
-    current_dim: usize, 
-    canvas: &mut Canvas, 
-    x: usize, 
-    y: usize, 
-    base_index: usize
+    board: &HyperBoard,
+    current_dim: usize,
+    canvas: &mut Canvas,
+    x: usize,
+    y: usize,
+    base_index: usize,
 ) {
     let side = 3;
-    
+
     if current_dim == 2 {
         for dy in 0..3 {
             for dx in 0..3 {
@@ -98,10 +102,10 @@ fn draw_recursive(
         }
         return;
     }
-    
+
     let (child_w, child_h) = calculate_size(current_dim - 1);
     let stride = side.pow((current_dim - 1) as u32);
-    
+
     if current_dim % 2 != 0 {
         // Horizontal arrangement
         let gap = 2;
@@ -110,9 +114,9 @@ fn draw_recursive(
             let next_y = y;
             let next_base = base_index + i * stride;
             draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
-            
+
             if i < 2 {
-                let sep_x = next_x + child_w + gap/2 - 1;
+                let sep_x = next_x + child_w + gap / 2 - 1;
                 for k in 0..child_h {
                     canvas.put(sep_x, next_y + k, &format!("{}|{}", COLOR_DIM, COLOR_RESET));
                 }
@@ -126,11 +130,11 @@ fn draw_recursive(
             let next_y = y + i * (child_h + gap);
             let next_base = base_index + i * stride;
             draw_recursive(board, current_dim - 1, canvas, next_x, next_y, next_base);
-            
+
             if i < 2 {
                 let sep_y = next_y + child_h;
                 for k in 0..child_w {
-                   canvas.put(next_x + k, sep_y, &format!("{}-{}", COLOR_DIM, COLOR_RESET)); 
+                    canvas.put(next_x + k, sep_y, &format!("{}-{}", COLOR_DIM, COLOR_RESET));
                 }
             }
         }

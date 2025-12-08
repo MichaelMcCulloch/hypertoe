@@ -20,31 +20,31 @@ impl SymmetryHandler {
         for perm in &permutations {
             for ref_mask in 0..num_reflections {
                 let mut map = vec![0; total_cells];
-                
+
                 for i in 0..total_cells {
                     // Turn index into coordinates (e.g., x,y,z)
                     let coords = index_to_coords(i, dimension, side);
-                    
+
                     // Apply Permutation: swap axes (e.g., x,y,z -> z,x,y)
                     let mut new_coords = vec![0; dimension];
                     for (dest_axis, &src_axis) in perm.iter().enumerate() {
                         new_coords[dest_axis] = coords[src_axis];
                     }
-                    
+
                     // Apply Reflection: flip axes (e.g., x -> side - 1 - x)
                     for (axis, val) in new_coords.iter_mut().enumerate() {
                         if (ref_mask >> axis) & 1 == 1 {
                             *val = side - 1 - *val;
                         }
                     }
-                    
+
                     // Turn coordinates back into a flat index
                     map[i] = coords_to_index(&new_coords, side);
                 }
                 maps.push(map);
             }
         }
-        
+
         SymmetryHandler { maps }
     }
 }
@@ -64,7 +64,11 @@ fn heap_permute(k: usize, arr: &mut [usize], res: &mut Vec<Vec<usize>>) {
     } else {
         heap_permute(k - 1, arr, res);
         for i in 0..k - 1 {
-            if k % 2 == 0 { arr.swap(i, k - 1); } else { arr.swap(0, k - 1); }
+            if k % 2 == 0 {
+                arr.swap(i, k - 1);
+            } else {
+                arr.swap(0, k - 1);
+            }
             heap_permute(k - 1, arr, res);
         }
     }

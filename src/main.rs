@@ -3,7 +3,7 @@ use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    
+
     // Default config
     let mut dimension = 3;
     let mut player_x = PlayerType::Human;
@@ -20,10 +20,22 @@ fn main() {
     }
     if args.len() > 2 {
         match args[2].as_str() {
-            "hh" => { player_x = PlayerType::Human; player_o = PlayerType::Human; },
-            "hc" => { player_x = PlayerType::Human; player_o = PlayerType::CPU; },
-            "ch" => { player_x = PlayerType::CPU; player_o = PlayerType::Human; },
-            "cc" => { player_x = PlayerType::CPU; player_o = PlayerType::CPU; },
+            "hh" => {
+                player_x = PlayerType::Human;
+                player_o = PlayerType::Human;
+            }
+            "hc" => {
+                player_x = PlayerType::Human;
+                player_o = PlayerType::CPU;
+            }
+            "ch" => {
+                player_x = PlayerType::CPU;
+                player_o = PlayerType::Human;
+            }
+            "cc" => {
+                player_x = PlayerType::CPU;
+                player_o = PlayerType::CPU;
+            }
             _ => println!("Unknown mode, defaulting to Human vs CPU"),
         }
     }

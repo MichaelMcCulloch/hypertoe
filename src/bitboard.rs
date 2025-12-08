@@ -1,22 +1,30 @@
+// src/bitboard.rs
 
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::fmt;
 
-/// Represents the game board using bit-packing for efficiency.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
-    Small(u32),       // For N=3 (27 bits)
-    Medium(u128),     // For N=4 (81 bits)
-    Large(Vec<u64>),  // For N>=5 (variable size)
+    Small(u32),
+    Medium(u128),
+    Large(Vec<u64>),
 }
 
-/// Holds the pre-calculated winning masks in a format optimized for the specific board size.
 #[derive(Clone, Debug)]
 pub enum WinningMasks {
-    Small(Vec<u32>),
-    Medium(Vec<u128>),
-    Large(Vec<Vec<u64>>),
+    Small {
+        masks: Vec<u32>,
+        map: Vec<Vec<usize>>,
+    },
+    Medium {
+        masks: Vec<u128>,
+        map: Vec<Vec<usize>>,
+    },
+    Large {
+        masks: Vec<Vec<u64>>,
+        map: Vec<Vec<usize>>,
+    },
 }
 
 impl BitBoard {
@@ -38,9 +46,8 @@ impl BitBoard {
             BitBoard::Medium(b) => *b |= 1 << index,
             BitBoard::Large(v) => {
                 let vec_idx = index / 64;
-                let bit_idx = index % 64;
                 if vec_idx < v.len() {
-                    v[vec_idx] |= 1 << bit_idx;
+                    v[vec_idx] |= 1 << (index % 64);
                 }
             }
         }
@@ -52,9 +59,8 @@ impl BitBoard {
             BitBoard::Medium(b) => *b &= !(1 << index),
             BitBoard::Large(v) => {
                 let vec_idx = index / 64;
-                let bit_idx = index % 64;
                 if vec_idx < v.len() {
-                    v[vec_idx] &= !(1 << bit_idx);
+                    v[vec_idx] &= !(1 << (index % 64));
                 }
             }
         }
@@ -66,9 +72,8 @@ impl BitBoard {
             BitBoard::Medium(b) => (*b & (1 << index)) != 0,
             BitBoard::Large(v) => {
                 let vec_idx = index / 64;
-                let bit_idx = index % 64;
                 if let Some(chunk) = v.get(vec_idx) {
-                    (*chunk & (1 << bit_idx)) != 0
+                    (*chunk & (1 << (index % 64))) != 0
                 } else {
                     false
                 }
@@ -76,32 +81,75 @@ impl BitBoard {
         }
     }
 
-    pub fn check_win(&self, masks: &WinningMasks) -> bool {
-        match (self, masks) {
-            (BitBoard::Small(board_val), WinningMasks::Small(masks_vec)) => {
+    pub fn check_win(&self, winning_masks: &WinningMasks) -> bool {
+        match (self, winning_masks) {
+            (BitBoard::Small(board), WinningMasks::Small { masks, .. }) => {
                 #[cfg(target_arch = "x86_64")]
                 if is_x86_feature_detected!("avx2") {
-                   return unsafe { check_win_u32_avx2(*board_val, masks_vec) };
+                    return unsafe { check_win_u32_avx2(*board, masks) };
                 }
-                // Scalar fallback
-                masks_vec.iter().any(|&m| (board_val & m) == m)
+                masks.iter().any(|&m| (board & m) == m)
             }
-            (BitBoard::Medium(board_val), WinningMasks::Medium(masks_vec)) => {
-                // N=4 (81 bits) fits in u128. AVX2 deals with 256 bits (two u128s).
+            (BitBoard::Medium(board), WinningMasks::Medium { masks, .. }) => {
                 #[cfg(target_arch = "x86_64")]
                 if is_x86_feature_detected!("avx2") {
-                    return unsafe { check_win_u128_avx2(*board_val, masks_vec) };
+                    return unsafe { check_win_u128_avx2(*board, masks) };
                 }
-                masks_vec.iter().any(|&m| (board_val & m) == m)
+                masks.iter().any(|&m| (board & m) == m)
             }
-            (BitBoard::Large(board_vec), WinningMasks::Large(masks_vec)) => {
-                // Scalar check for large boards
-                masks_vec.iter().any(|mask_chunks| {
-                     if board_vec.len() != mask_chunks.len() { return false; }
-                     board_vec.iter().zip(mask_chunks.iter()).all(|(b, m)| (*b & *m) == *m)
+            (BitBoard::Large(board), WinningMasks::Large { masks, .. }) => {
+                masks.iter().any(|mask_chunks| {
+                    board.len() == mask_chunks.len()
+                        && board
+                            .iter()
+                            .zip(mask_chunks.iter())
+                            .all(|(b, m)| (*b & *m) == *m)
                 })
             }
-            _ => false, // Mismatched types
+            _ => false,
+        }
+    }
+
+    pub fn check_win_at(&self, winning_masks: &WinningMasks, index: usize) -> bool {
+        match (self, winning_masks) {
+            (BitBoard::Small(board), WinningMasks::Small { masks, map }) => {
+                if let Some(indices) = map.get(index) {
+                    for &i in indices {
+                        let m = masks[i];
+                        if (board & m) == m {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            (BitBoard::Medium(board), WinningMasks::Medium { masks, map }) => {
+                if let Some(indices) = map.get(index) {
+                    for &i in indices {
+                        let m = masks[i];
+                        if (board & m) == m {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            (BitBoard::Large(board), WinningMasks::Large { masks, map }) => {
+                if let Some(indices) = map.get(index) {
+                    for &i in indices {
+                        let mask_chunks = &masks[i];
+                        if board
+                            .iter()
+                            .zip(mask_chunks.iter())
+                            .all(|(b, m)| (*b & *m) == *m)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
         }
     }
 }
@@ -111,84 +159,78 @@ impl BitBoard {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn check_win_u32_avx2(board: u32, masks: &[u32]) -> bool {
-    let board_vec = _mm256_set1_epi32(board as i32);
-    
-    // Process 8 masks at a time
+    let board_vec = unsafe { _mm256_set1_epi32(board as i32) }; // Wrapping unsafe op
+
     let chunks = masks.chunks_exact(8);
     let remainder = chunks.remainder();
-    
+
     for chunk in chunks {
+        // FIX: Wrapped SIMD calls in unsafe block
         unsafe {
             let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
-            // (board & mask)
             let and_res = _mm256_and_si256(board_vec, mask_vec);
-            // (board & mask) == mask
             let cmp = _mm256_cmpeq_epi32(and_res, mask_vec);
-            // Check if any element equality was true (0xFFFFFFFF)
             if _mm256_movemask_epi8(cmp) != 0 {
                 return true;
             }
         }
     }
-    
-    // Fallback for remainder
+
     for &m in remainder {
-        if (board & m) == m { return true; }
+        if (board & m) == m {
+            return true;
+        }
     }
-    
+
     false
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn check_win_u128_avx2(board: u128, masks: &[u128]) -> bool {
-    // 128-bit integers are a bit tricky in AVX2 which uses 256-bit registers (checking 2 masks at once).
-    // We can cast u128 array to __m128i pointer, or load 2 u128s into __m256i.
-    
-    // _mm256_set1_epi64x is available but not set1_epi128. 
-    // We can construct the board vector by broadcasting. 
     let board_low = board as u64;
     let board_high = (board >> 64) as u64;
-    
-    // Set 256 bit vector as [low, high, low, high] (two copies of the board)
-    let board_vec = _mm256_set_epi64x(
-        board_high as i64, board_low as i64,
-        board_high as i64, board_low as i64 
-    );
-    
+
+    // FIX: Wrapped unsafe op
+    let board_vec = unsafe {
+        _mm256_set_epi64x(
+            board_high as i64,
+            board_low as i64,
+            board_high as i64,
+            board_low as i64,
+        )
+    };
+
     let chunks = masks.chunks_exact(2);
     let remainder = chunks.remainder();
-    
+
     for chunk in chunks {
-        // chunk contains 2 u128s.
-        // Load as 256-bit
+        // FIX: Wrapped SIMD calls in unsafe block
         unsafe {
             let mask_vec = _mm256_loadu_si256(chunk.as_ptr() as *const __m256i);
-            
             let and_res = _mm256_and_si256(board_vec, mask_vec);
-            // AVX2 has compare for 8, 16, 32, 64 bits. Not 128.
-            // We use cmpeq_epi64.
             let cmp = _mm256_cmpeq_epi64(and_res, mask_vec);
-            
-            // cmp result is [q3, q2, q1, q0].
-            // We want (q1 && q0) || (q3 && q2).
-            // movemask gives us 32 bits (1 bit per byte). 
-            
+
             let mask_bits = _mm256_movemask_epi8(cmp);
-            
-            if (mask_bits & 0xFFFF) == 0xFFFF { return true; }
+
+            if (mask_bits & 0xFFFF) == 0xFFFF {
+                return true;
+            }
             let mb_u32 = mask_bits as u32;
-            if (mb_u32 & 0xFFFF0000) == 0xFFFF0000 { return true; }
+            if (mb_u32 & 0xFFFF0000) == 0xFFFF0000 {
+                return true;
+            }
         }
     }
-    
+
     for &m in remainder {
-        if (board & m) == m { return true; }
+        if (board & m) == m {
+            return true;
+        }
     }
-    
+
     false
 }
-
 
 impl fmt::Display for BitBoard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
