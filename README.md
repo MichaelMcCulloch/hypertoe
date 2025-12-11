@@ -76,7 +76,6 @@ RUSTFLAGS="-C target-cpu=native" cargo run --release -- [dimension] [mode] [dept
 - **mode**: A two-character string specifying players for X and O.
     - `h`: Human
     - `c`: Computer (Minimax)
-    - `q`: Q-Learner (requires trained model)
     - Example: `hc` (Human vs Computer), `cc` (Computer vs Computer).
 - **depth**: Minimax search depth limit.
 
@@ -92,7 +91,4 @@ Watch two bots play in 3D:
 RUSTFLAGS="-C target-cpu=native" cargo run --release -- 3 cc
 ```
 
-Train Q-Learning agent (experimental):
-```bash
-RUSTFLAGS="-C target-cpu=native" cargo run --release -- 3 Q
 ```
