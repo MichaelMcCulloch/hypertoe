@@ -1,5 +1,5 @@
 use crate::domain::models::{Board, BoardState, GameResult, Player};
-use crate::domain::services::{Clock, PlayerStrategy};
+use crate::domain::services::PlayerStrategy;
 use std::fmt::Display;
 
 pub struct GameService<'a, S: BoardState> {

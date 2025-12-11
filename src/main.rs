@@ -4,7 +4,6 @@ use hypertictactoe::domain::services::PlayerStrategy;
 use hypertictactoe::infrastructure::ai::MinimaxBot;
 use hypertictactoe::infrastructure::console::HumanConsolePlayer;
 use hypertictactoe::infrastructure::persistence::BitBoardState;
-use hypertictactoe::infrastructure::time::SystemClock;
 use std::env;
 
 fn main() {

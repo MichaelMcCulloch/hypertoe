@@ -1,6 +1,5 @@
 use crate::application::game_service::GameService;
 use crate::domain::models::{BoardState, GameResult};
-use crate::domain::services::Clock;
 use std::fmt::Display;
 
 pub struct ConsoleInterface;
