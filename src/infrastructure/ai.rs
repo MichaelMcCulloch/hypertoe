@@ -22,8 +22,9 @@ pub struct MinimaxBot {
 
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
-        let mut killer_moves = Vec::with_capacity(max_depth + 1);
-        for _ in 0..=max_depth {
+        let killer_storage_depth = std::cmp::min(max_depth, 64);
+        let mut killer_moves = Vec::with_capacity(killer_storage_depth + 1);
+        for _ in 0..=killer_storage_depth {
             killer_moves.push([AtomicUsize::new(usize::MAX), AtomicUsize::new(usize::MAX)]);
         }
 
@@ -630,10 +631,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
 
             if available_moves.len() > 1 {
                 // --- REMAINING MOVES SEARCH ---
-                let use_parallel = self.max_depth >= 4; // Lower threshold to use parallelism more often with ID? Or keep high?
-                                                        // With ID, shallow depths are fast. Parallelism overload might hurt depth 1-3.
-                                                        // Let's stick to >= 4 or 6.
-
+                let use_parallel = self.max_depth >= 4;
                 let best_move_entry = if use_parallel {
                     available_moves[1..]
                         .par_iter()
