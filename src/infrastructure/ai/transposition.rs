@@ -27,6 +27,7 @@ impl Flag {
     }
 }
 
+#[repr(align(64))]
 pub struct TTEntry {
     /// Stores the packed value: score (32), depth (8), flag (2), extra (22)
     pub data: AtomicU64,
