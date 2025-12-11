@@ -1,8 +1,8 @@
+use crate::domain::models::{BoardState, Player};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::fmt;
 use std::sync::Arc;
-use crate::domain::models::{BoardState, Player};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
@@ -15,15 +15,18 @@ pub enum BitBoard {
 pub enum WinningMasks {
     Small {
         masks: Vec<u32>,
-        map: Vec<Vec<usize>>,
+        map_flat: Vec<usize>,
+        map_offsets: Vec<(u32, u32)>, // (start, count)
     },
     Medium {
         masks: Vec<u128>,
-        map: Vec<Vec<usize>>,
+        map_flat: Vec<usize>,
+        map_offsets: Vec<(u32, u32)>,
     },
     Large {
         masks: Vec<Vec<u64>>,
-        map: Vec<Vec<usize>>,
+        map_flat: Vec<usize>,
+        map_offsets: Vec<(u32, u32)>,
     },
 }
 
@@ -223,9 +226,18 @@ impl BitBoard {
 
     pub fn check_win_at(&self, winning_masks: &WinningMasks, index: usize) -> bool {
         match (self, winning_masks) {
-            (BitBoard::Small(board), WinningMasks::Small { masks, map }) => {
-                if let Some(indices) = map.get(index) {
-                    for &i in indices {
+            (
+                BitBoard::Small(board),
+                WinningMasks::Small {
+                    masks,
+                    map_flat,
+                    map_offsets,
+                },
+            ) => {
+                if index < map_offsets.len() {
+                    let (start, count) = map_offsets[index];
+                    let range = start as usize..(start + count) as usize;
+                    for &i in &map_flat[range] {
                         let m = masks[i];
                         if (board & m) == m {
                             return true;
@@ -234,9 +246,18 @@ impl BitBoard {
                 }
                 false
             }
-            (BitBoard::Medium(board), WinningMasks::Medium { masks, map }) => {
-                if let Some(indices) = map.get(index) {
-                    for &i in indices {
+            (
+                BitBoard::Medium(board),
+                WinningMasks::Medium {
+                    masks,
+                    map_flat,
+                    map_offsets,
+                },
+            ) => {
+                if index < map_offsets.len() {
+                    let (start, count) = map_offsets[index];
+                    let range = start as usize..(start + count) as usize;
+                    for &i in &map_flat[range] {
                         let m = masks[i];
                         if (board & m) == m {
                             return true;
@@ -245,9 +266,18 @@ impl BitBoard {
                 }
                 false
             }
-            (BitBoard::Large(board), WinningMasks::Large { masks, map }) => {
-                if let Some(indices) = map.get(index) {
-                    for &i in indices {
+            (
+                BitBoard::Large(board),
+                WinningMasks::Large {
+                    masks,
+                    map_flat,
+                    map_offsets,
+                },
+            ) => {
+                if index < map_offsets.len() {
+                    let (start, count) = map_offsets[index];
+                    let range = start as usize..(start + count) as usize;
+                    for &i in &map_flat[range] {
                         let mask_chunks = &masks[i];
                         if board
                             .iter()
@@ -271,12 +301,23 @@ fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
     let lines_indices = generate_winning_lines_indices(dimension, side);
     let total_cells = side.pow(dimension as u32);
 
-    let mut map: Vec<Vec<usize>> = vec![vec![]; total_cells];
+    let mut map_flat = Vec::new();
+    let mut map_offsets = Vec::with_capacity(total_cells);
 
+    // Build temporary map to group lines by cell
+    let mut temp_map: Vec<Vec<usize>> = vec![vec![]; total_cells];
     for (line_idx, line) in lines_indices.iter().enumerate() {
         for &cell_idx in line {
-            map[cell_idx].push(line_idx);
+            temp_map[cell_idx].push(line_idx);
         }
+    }
+
+    // Flatten
+    for indices in temp_map {
+        let start = map_flat.len() as u32;
+        let count = indices.len() as u32;
+        map_flat.extend(indices);
+        map_offsets.push((start, count));
     }
 
     if total_cells <= 32 {
@@ -288,7 +329,11 @@ fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
             }
             masks.push(mask);
         }
-        WinningMasks::Small { masks, map }
+        WinningMasks::Small {
+            masks,
+            map_flat,
+            map_offsets,
+        }
     } else if total_cells <= 128 {
         let mut masks = Vec::new();
         for line in lines_indices {
@@ -298,7 +343,11 @@ fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
             }
             masks.push(mask);
         }
-        WinningMasks::Medium { masks, map }
+        WinningMasks::Medium {
+            masks,
+            map_flat,
+            map_offsets,
+        }
     } else {
         let mut masks = Vec::new();
         let num_u64s = (total_cells + 63) / 64;
@@ -310,7 +359,11 @@ fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
             }
             masks.push(mask_chunks);
         }
-        WinningMasks::Large { masks, map }
+        WinningMasks::Large {
+            masks,
+            map_flat,
+            map_offsets,
+        }
     }
 }
 
