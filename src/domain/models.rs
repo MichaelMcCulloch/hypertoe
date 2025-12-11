@@ -22,6 +22,8 @@ pub enum GameResult {
     InProgress,
 }
 
+use crate::domain::coordinate::Coordinate;
+
 /// Trait defining the storage and core mechanics of the board backend.
 /// This allows us to strictly separate the "BitBoard" optimization (Infrastructure)
 /// from the "Board" concept (Domain).
@@ -32,9 +34,9 @@ pub trait BoardState: Debug + Clone {
     fn dimension(&self) -> usize;
     fn side(&self) -> usize;
     fn total_cells(&self) -> usize;
-    fn get_cell(&self, index: usize) -> Option<Player>;
-    fn set_cell(&mut self, index: usize, player: Player) -> Result<(), String>;
-    fn clear_cell(&mut self, index: usize);
+    fn get_cell(&self, coord: &Coordinate) -> Option<Player>;
+    fn set_cell(&mut self, coord: &Coordinate, player: Player) -> Result<(), String>;
+    fn clear_cell(&mut self, coord: &Coordinate);
     fn check_win(&self) -> Option<Player>;
     fn is_full(&self) -> bool;
 }
@@ -57,12 +59,12 @@ impl<S: BoardState> Board<S> {
         self.state.dimension()
     }
 
-    pub fn make_move(&mut self, index: usize, player: Player) -> Result<(), String> {
-        self.state.set_cell(index, player)
+    pub fn make_move(&mut self, coord: Coordinate, player: Player) -> Result<(), String> {
+        self.state.set_cell(&coord, player)
     }
 
-    pub fn get_cell(&self, index: usize) -> Option<Player> {
-        self.state.get_cell(index)
+    pub fn get_cell(&self, coord: &Coordinate) -> Option<Player> {
+        self.state.get_cell(coord)
     }
 
     pub fn check_status(&self) -> GameResult {

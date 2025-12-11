@@ -2,68 +2,58 @@ use crate::domain::models::{Board, BoardState, GameResult, Player};
 use crate::domain::services::{Clock, PlayerStrategy};
 use std::fmt::Display;
 
-pub struct GameService<'a, S: BoardState, C: Clock> {
+pub struct GameService<'a, S: BoardState> {
     board: Board<S>,
-    clock: C,
     player_x: Box<dyn PlayerStrategy<S> + 'a>, // Boxing traits requires lifetime if they capture env?
     player_o: Box<dyn PlayerStrategy<S> + 'a>,
     turn: Player,
 }
 
-impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
+impl<'a, S: BoardState + Display> GameService<'a, S> {
     pub fn new(
         board: Board<S>,
-        clock: C,
         player_x: Box<dyn PlayerStrategy<S> + 'a>,
         player_o: Box<dyn PlayerStrategy<S> + 'a>,
     ) -> Self {
         GameService {
             board,
-            clock,
             player_x,
             player_o,
             turn: Player::X,
         }
     }
 
-    pub fn start(&mut self) {
-        println!("Starting Game...");
-        println!("{}", self.board.state());
+    pub fn board(&self) -> &Board<S> {
+        &self.board
+    }
 
-        loop {
-            match self.board.check_status() {
-                GameResult::Win(p) => {
-                    println!("Player {:?} Wins!", p);
-                    break;
-                }
-                GameResult::Draw => {
-                    println!("It's a Draw!");
-                    break;
-                }
-                GameResult::InProgress => {}
-            }
+    pub fn turn(&self) -> Player {
+        self.turn
+    }
 
-            let start_time = self.clock.now();
-            println!("Player {:?}'s turn (Time: {:?})", self.turn, start_time);
+    pub fn is_game_over(&self) -> Option<GameResult> {
+        match self.board.check_status() {
+            GameResult::InProgress => None,
+            result => Some(result),
+        }
+    }
 
-            let strategy = match self.turn {
-                Player::X => &mut self.player_x,
-                Player::O => &mut self.player_o,
-            };
+    pub fn perform_next_move(&mut self) -> Result<(), String> {
+        if self.is_game_over().is_some() {
+            return Err("Game is over".to_string());
+        }
 
-            // Assuming get_best_move is blocking for now
-            if let Some(move_idx) = strategy.get_best_move(self.board.state(), self.turn) {
-                match self.board.make_move(move_idx, self.turn) {
-                    Ok(_) => {
-                        println!("{}", self.board.state()); // Display board
-                        self.turn = self.turn.opponent();
-                    }
-                    Err(e) => println!("Error making move: {}", e),
-                }
-            } else {
-                println!("No moves available? Check logic.");
-                break;
-            }
+        let strategy = match self.turn {
+            Player::X => &mut self.player_x,
+            Player::O => &mut self.player_o,
+        };
+
+        if let Some(coord) = strategy.get_best_move(self.board.state(), self.turn) {
+            self.board.make_move(coord, self.turn)?;
+            self.turn = self.turn.opponent();
+            Ok(())
+        } else {
+            Err("No move available".to_string())
         }
     }
 }

@@ -1,3 +1,4 @@
+use crate::domain::coordinate::Coordinate;
 use crate::domain::models::{BoardState, Player};
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
@@ -42,6 +43,38 @@ pub struct BitBoardState {
     pub winning_masks: Arc<WinningMasks>,
 }
 
+impl BitBoardState {
+    pub fn get_cell_index(&self, index: usize) -> Option<Player> {
+        if self.p1.get_bit(index) {
+            Some(Player::X)
+        } else if self.p2.get_bit(index) {
+            Some(Player::O)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_cell_index(&mut self, index: usize, player: Player) -> Result<(), String> {
+        if index >= self.total_cells {
+            return Err("Index out of bounds".to_string());
+        }
+        if self.p1.get_bit(index) || self.p2.get_bit(index) {
+            return Err("Cell already occupied".to_string());
+        }
+
+        match player {
+            Player::X => self.p1.set_bit(index),
+            Player::O => self.p2.set_bit(index),
+        }
+        Ok(())
+    }
+
+    pub fn clear_cell_index(&mut self, index: usize) {
+        self.p1.clear_bit(index);
+        self.p2.clear_bit(index);
+    }
+}
+
 impl BoardState for BitBoardState {
     fn new(dimension: usize) -> Self {
         let side: usize = 3;
@@ -74,34 +107,21 @@ impl BoardState for BitBoardState {
         self.total_cells
     }
 
-    fn get_cell(&self, index: usize) -> Option<Player> {
-        if self.p1.get_bit(index) {
-            Some(Player::X)
-        } else if self.p2.get_bit(index) {
-            Some(Player::O)
-        } else {
-            None
-        }
+    fn get_cell(&self, coord: &Coordinate) -> Option<Player> {
+        let index = coords_to_index(&coord.values, self.side)?;
+        self.get_cell_index(index)
     }
 
-    fn set_cell(&mut self, index: usize, player: Player) -> Result<(), String> {
-        if index >= self.total_cells {
-            return Err("Index out of bounds".to_string());
-        }
-        if self.p1.get_bit(index) || self.p2.get_bit(index) {
-            return Err("Cell already occupied".to_string());
-        }
-
-        match player {
-            Player::X => self.p1.set_bit(index),
-            Player::O => self.p2.set_bit(index),
-        }
-        Ok(())
+    fn set_cell(&mut self, coord: &Coordinate, player: Player) -> Result<(), String> {
+        let index = coords_to_index(&coord.values, self.side)
+            .ok_or_else(|| "Invalid coordinate".to_string())?;
+        self.set_cell_index(index, player)
     }
 
-    fn clear_cell(&mut self, index: usize) {
-        self.p1.clear_bit(index);
-        self.p2.clear_bit(index);
+    fn clear_cell(&mut self, coord: &Coordinate) {
+        if let Some(index) = coords_to_index(&coord.values, self.side) {
+            self.clear_cell_index(index);
+        }
     }
 
     fn check_win(&self) -> Option<Player> {
@@ -569,7 +589,7 @@ fn get_valid_starts(dimension: usize, side: usize, dir: &[isize]) -> Vec<Vec<usi
     starts
 }
 
-fn index_to_coords(index: usize, dimension: usize, side: usize) -> Vec<usize> {
+pub fn index_to_coords(index: usize, dimension: usize, side: usize) -> Vec<usize> {
     let mut coords = vec![0; dimension];
     let mut temp = index;
     for i in 0..dimension {
@@ -579,7 +599,7 @@ fn index_to_coords(index: usize, dimension: usize, side: usize) -> Vec<usize> {
     coords
 }
 
-fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
+pub fn coords_to_index(coords: &[usize], side: usize) -> Option<usize> {
     let mut index = 0;
     let mut multiplier = 1;
     for &c in coords {
@@ -741,27 +761,27 @@ mod tests {
     #[test]
     fn test_win_detection() {
         let mut board = BitBoardState::new(2);
-        board.set_cell(0, Player::X).unwrap();
-        board.set_cell(1, Player::X).unwrap();
-        board.set_cell(2, Player::X).unwrap();
+        board.set_cell_index(0, Player::X).unwrap();
+        board.set_cell_index(1, Player::X).unwrap();
+        board.set_cell_index(2, Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
 
     #[test]
     fn test_diagonal_win_20_11_02() {
         let mut board = BitBoardState::new(2);
-        board.set_cell(2, Player::X).unwrap();
-        board.set_cell(4, Player::X).unwrap();
-        board.set_cell(6, Player::X).unwrap();
+        board.set_cell_index(2, Player::X).unwrap();
+        board.set_cell_index(4, Player::X).unwrap();
+        board.set_cell_index(6, Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
 
     #[test]
     fn test_reproduce_check_win_through_center() {
         let mut board = BitBoardState::new(3);
-        board.set_cell(4, Player::X).unwrap();
-        board.set_cell(13, Player::X).unwrap();
-        board.set_cell(22, Player::X).unwrap();
+        board.set_cell_index(4, Player::X).unwrap();
+        board.set_cell_index(13, Player::X).unwrap();
+        board.set_cell_index(22, Player::X).unwrap();
         assert_eq!(board.check_win(), Some(Player::X));
     }
 }

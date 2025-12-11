@@ -95,7 +95,7 @@ impl MinimaxBot {
     fn calculate_zobrist_hash(&self, board: &BitBoardState) -> u64 {
         let mut h = 0;
         for cell_idx in 0..board.total_cells() {
-            if let Some(p) = board.get_cell(cell_idx) {
+            if let Some(p) = board.get_cell_index(cell_idx) {
                 let p_idx = match p {
                     Player::X => 0,
                     Player::O => 1,
@@ -129,7 +129,7 @@ impl MinimaxBot {
         // 2. Collect moves using Pre-Sorted Indices
         // This implicitly handles the "Strategic Value" sort for free.
         for &idx in &self.sorted_indices {
-            if board.get_cell(idx).is_none() {
+            if board.get_cell_index(idx).is_none() {
                 if count < buffer.len() {
                     buffer[count] = idx;
                     count += 1;
@@ -401,7 +401,7 @@ impl MinimaxBot {
             let (score_delta, is_win) = self.calculate_score_delta(board, idx, current_player);
             let next_score = current_score + score_delta;
 
-            board.set_cell(idx, current_player).unwrap();
+            board.set_cell_index(idx, current_player).unwrap();
 
             let new_hash = current_hash ^ self.zobrist_keys[idx][p_idx];
 
@@ -425,7 +425,7 @@ impl MinimaxBot {
                 )
             };
 
-            board.clear_cell(idx);
+            board.clear_cell_index(idx);
 
             match current_player {
                 Player::X => {
@@ -546,8 +546,11 @@ impl MinimaxBot {
     }
 }
 
+use crate::domain::coordinate::Coordinate;
+use crate::infrastructure::persistence::index_to_coords;
+
 impl PlayerStrategy<BitBoardState> for MinimaxBot {
-    fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
+    fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<Coordinate> {
         self.ensure_initialized(board);
 
         let mut best_move = None;
@@ -596,7 +599,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
             let (first_delta, first_is_win) = self.calculate_score_delta(board, first_move, player);
             let first_next_score = initial_score + first_delta;
 
-            work_board.set_cell(first_move, player).unwrap();
+            work_board.set_cell_index(first_move, player).unwrap();
 
             let next_hash = initial_hash ^ self.zobrist_keys[first_move][p_idx];
 
@@ -639,7 +642,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                             let (delta, is_win) = self.calculate_score_delta(board, mv, player);
                             let next_score = initial_score + delta;
 
-                            work_board.set_cell(mv, player).unwrap();
+                            work_board.set_cell_index(mv, player).unwrap();
                             let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
 
                             let score = if is_win {
@@ -672,7 +675,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                             let (delta, is_win) = self.calculate_score_delta(board, mv, player);
                             let next_score = initial_score + delta;
 
-                            work_board.set_cell(mv, player).unwrap();
+                            work_board.set_cell_index(mv, player).unwrap();
                             let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
 
                             let score = if is_win {
@@ -725,7 +728,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         }
 
         self.max_depth = global_max_depth;
-        best_move
+        best_move.map(|idx| Coordinate::new(index_to_coords(idx, board.dimension, board.side)))
     }
 }
 
@@ -747,9 +750,9 @@ mod tests {
     #[test]
     fn test_minimax_blocks_win() {
         let mut board = BitBoardState::new(2);
-        board.set_cell(0, Player::X).unwrap();
-        board.set_cell(3, Player::O).unwrap();
-        board.set_cell(4, Player::O).unwrap();
+        board.set_cell_index(0, Player::X).unwrap();
+        board.set_cell_index(3, Player::O).unwrap();
+        board.set_cell_index(4, Player::O).unwrap();
 
         // Board:
         // X . .  (0, 1, 2)
@@ -758,7 +761,15 @@ mod tests {
 
         let mut bot = MinimaxBot::new(5);
         let best_move = bot.get_best_move(&board, Player::X);
+        // index 5 is (1, 2) in coords (row 1 col 2, but wait, need to check coords mapping)
+        // index 5 -> 5%3=2, 5/3=1 -> [2, 1] if x,y order or [1,2] if y,x
+        // persistence::index_to_coords logic:
+        // coords[i] = temp % side; temp /= side;
+        // i=0 -> x, i=1 -> y. So [2, 1]
 
-        assert_eq!(best_move, Some(5));
+        let move_coord = best_move.unwrap();
+        let move_idx =
+            crate::infrastructure::persistence::coords_to_index(&move_coord.values, 3).unwrap();
+        assert_eq!(move_idx, 5);
     }
 }

@@ -87,7 +87,14 @@ fn draw_recursive<S: BoardState>(
         for dy in 0..3 {
             for dx in 0..3 {
                 let cell_idx = base_index + dx + dy * side;
-                let s = match board.get_cell(cell_idx) {
+                let coord_vals = crate::infrastructure::persistence::index_to_coords(
+                    cell_idx,
+                    board.dimension(),
+                    board.side(),
+                );
+                let coord = crate::domain::coordinate::Coordinate::new(coord_vals);
+
+                let s = match board.get_cell(&coord) {
                     Some(Player::X) => format!("{}X{}", COLOR_X, COLOR_RESET),
                     Some(Player::O) => format!("{}O{}", COLOR_O, COLOR_RESET),
                     None => format!("{}.{}", COLOR_DIM, COLOR_RESET),

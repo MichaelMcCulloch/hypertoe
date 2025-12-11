@@ -47,12 +47,10 @@ fn main() {
         _ => Box::new(MinimaxBot::new(depth)),
     };
 
-    let clock = SystemClock::new();
-
     // Board generic param inference?
     // We need to explicitly type the Board or let it infer from GameService.
     let board = Board::<BitBoardState>::new(dimension);
 
-    let mut game = GameService::new(board, clock, player_x, player_o);
-    game.start();
+    let game = GameService::new(board, player_x, player_o);
+    hypertictactoe::interface::console::ConsoleInterface::run(game);
 }
