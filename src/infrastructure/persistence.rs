@@ -4,11 +4,11 @@ use std::arch::x86_64::*;
 use std::fmt;
 use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BitBoard {
     Small(u32),
     Medium(u128),
-    Large(Vec<u64>),
+    Large { data: [u64; 4], len: usize },
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +115,7 @@ impl BoardState for BitBoardState {
     }
 
     fn is_full(&self) -> bool {
-        let combined = self.p1.or_with(&self.p2);
+        let combined = self.p1.or_with(self.p2);
         combined.is_full(self.total_cells)
     }
 }
@@ -136,8 +136,11 @@ impl BitBoard {
         } else if total_cells <= 128 {
             BitBoard::Medium(0)
         } else {
-            let num_u64s = (total_cells + 63) / 64;
-            BitBoard::Large(vec![0; num_u64s])
+            let len = (total_cells + 63) / 64;
+            if len > 4 {
+                panic!("Board too large for current implementation (max 256 cells)");
+            }
+            BitBoard::Large { data: [0; 4], len }
         }
     }
 
@@ -145,10 +148,10 @@ impl BitBoard {
         match self {
             BitBoard::Small(b) => *b |= 1 << index,
             BitBoard::Medium(b) => *b |= 1 << index,
-            BitBoard::Large(v) => {
+            BitBoard::Large { data, len } => {
                 let vec_idx = index / 64;
-                if vec_idx < v.len() {
-                    v[vec_idx] |= 1 << (index % 64);
+                if vec_idx < *len {
+                    data[vec_idx] |= 1 << (index % 64);
                 }
             }
         }
@@ -158,10 +161,10 @@ impl BitBoard {
         match self {
             BitBoard::Small(b) => *b &= !(1 << index),
             BitBoard::Medium(b) => *b &= !(1 << index),
-            BitBoard::Large(v) => {
+            BitBoard::Large { data, len } => {
                 let vec_idx = index / 64;
-                if vec_idx < v.len() {
-                    v[vec_idx] &= !(1 << (index % 64));
+                if vec_idx < *len {
+                    data[vec_idx] &= !(1 << (index % 64));
                 }
             }
         }
@@ -171,10 +174,10 @@ impl BitBoard {
         match self {
             BitBoard::Small(b) => (*b & (1 << index)) != 0,
             BitBoard::Medium(b) => (*b & (1 << index)) != 0,
-            BitBoard::Large(v) => {
+            BitBoard::Large { data, len } => {
                 let vec_idx = index / 64;
-                if let Some(chunk) = v.get(vec_idx) {
-                    (*chunk & (1 << (index % 64))) != 0
+                if vec_idx < *len {
+                    (data[vec_idx] & (1 << (index % 64))) != 0
                 } else {
                     false
                 }
@@ -186,18 +189,32 @@ impl BitBoard {
         match self {
             BitBoard::Small(b) => b.count_ones(),
             BitBoard::Medium(b) => b.count_ones(),
-            BitBoard::Large(v) => v.iter().map(|chunk| chunk.count_ones()).sum(),
+            BitBoard::Large { data, len } => {
+                let mut sum = 0;
+                for i in 0..*len {
+                    sum += data[i].count_ones();
+                }
+                sum
+            }
         }
     }
 
-    pub fn or_with(&self, other: &BitBoard) -> BitBoard {
+    pub fn or_with(&self, other: BitBoard) -> BitBoard {
         match (self, other) {
             (BitBoard::Small(a), BitBoard::Small(b)) => BitBoard::Small(a | b),
             (BitBoard::Medium(a), BitBoard::Medium(b)) => BitBoard::Medium(a | b),
-            (BitBoard::Large(a), BitBoard::Large(b)) => {
-                BitBoard::Large(a.iter().zip(b.iter()).map(|(x, y)| x | y).collect())
+            (BitBoard::Large { data: a, len: la }, BitBoard::Large { data: b, len: lb }) => {
+                let len = (*la).max(lb);
+                let mut new_data = [0; 4];
+                for i in 0..len {
+                    new_data[i] = a[i] | b[i];
+                }
+                BitBoard::Large {
+                    data: new_data,
+                    len,
+                }
             }
-            _ => self.clone(),
+            _ => *self,
         }
     }
 
@@ -213,13 +230,19 @@ impl BitBoard {
             (BitBoard::Medium(board), WinningMasks::Medium { masks, .. }) => unsafe {
                 check_win_u128_opt(*board, masks)
             },
-            (BitBoard::Large(board), WinningMasks::Large { masks, .. }) => {
+            (BitBoard::Large { data: board, len }, WinningMasks::Large { masks, .. }) => {
                 masks.iter().any(|mask_chunks| {
-                    board.len() == mask_chunks.len()
-                        && board
-                            .iter()
-                            .zip(mask_chunks.iter())
-                            .all(|(b, m)| (*b & *m) == *m)
+                    // mask_chunks is Vec<u64>
+                    // board is [u64; 4]
+                    if *len != mask_chunks.len() {
+                        return false;
+                    }
+                    for i in 0..*len {
+                        if (board[i] & mask_chunks[i]) != mask_chunks[i] {
+                            return false;
+                        }
+                    }
+                    true
                 })
             }
             _ => false,
@@ -259,7 +282,7 @@ impl BitBoard {
                 false
             }
             (
-                BitBoard::Large(board),
+                BitBoard::Large { data: board, .. },
                 WinningMasks::Large {
                     masks,
                     map_flat,
@@ -271,11 +294,14 @@ impl BitBoard {
                     let range = start as usize..(start + count) as usize;
                     for &i in &map_flat[range] {
                         let mask_chunks = &masks[i];
-                        if board
-                            .iter()
-                            .zip(mask_chunks.iter())
-                            .all(|(b, m)| (*b & *m) == *m)
-                        {
+                        let mut match_all = true;
+                        for (k, m) in mask_chunks.iter().enumerate() {
+                            if (board[k] & *m) != *m {
+                                match_all = false;
+                                break;
+                            }
+                        }
+                        if match_all {
                             return true;
                         }
                     }
@@ -321,7 +347,7 @@ impl BitBoard {
                 false
             }
             (
-                BitBoard::Large(board),
+                BitBoard::Large { data: board, .. },
                 WinningMasks::Large {
                     masks,
                     map_flat,
@@ -337,14 +363,14 @@ impl BitBoard {
                     for &i in &map_flat[range] {
                         let mask_chunks = &masks[i];
                         let mut match_all = true;
-                        for (k, (&b, &m)) in board.iter().zip(mask_chunks.iter()).enumerate() {
+                        for (k, m) in mask_chunks.iter().enumerate() {
                             if k == vec_idx {
-                                if (b & m) != (m & !bit_val) {
+                                if (board[k] & m) != (m & !bit_val) {
                                     match_all = false;
                                     break;
                                 }
                             } else {
-                                if (b & m) != m {
+                                if (board[k] & m) != *m {
                                     match_all = false;
                                     break;
                                 }
