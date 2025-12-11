@@ -1,4 +1,4 @@
-use crate::domain::models::{Board, BoardState, Player, GameResult};
+use crate::domain::models::{Board, BoardState, GameResult, Player};
 use crate::domain::services::{Clock, PlayerStrategy};
 use std::fmt::Display;
 
@@ -28,7 +28,7 @@ impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
 
     pub fn start(&mut self) {
         println!("Starting Game...");
-        println!("{}", self.board.state()); 
+        println!("{}", self.board.state());
 
         loop {
             match self.board.check_status() {
@@ -53,13 +53,13 @@ impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
 
             // Assuming get_best_move is blocking for now
             if let Some(move_idx) = strategy.get_best_move(self.board.state(), self.turn) {
-                 match self.board.make_move(move_idx, self.turn) {
-                     Ok(_) => {
-                         println!("{}", self.board.state()); // Display board
-                         self.turn = self.turn.opponent();
-                     }
-                     Err(e) => println!("Error making move: {}", e),
-                 }
+                match self.board.make_move(move_idx, self.turn) {
+                    Ok(_) => {
+                        println!("{}", self.board.state()); // Display board
+                        self.turn = self.turn.opponent();
+                    }
+                    Err(e) => println!("Error making move: {}", e),
+                }
             } else {
                 println!("No moves available? Check logic.");
                 break;

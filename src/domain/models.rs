@@ -26,7 +26,9 @@ pub enum GameResult {
 /// This allows us to strictly separate the "BitBoard" optimization (Infrastructure)
 /// from the "Board" concept (Domain).
 pub trait BoardState: Debug + Clone {
-    fn new(dimension: usize) -> Self where Self: Sized;
+    fn new(dimension: usize) -> Self
+    where
+        Self: Sized;
     fn dimension(&self) -> usize;
     fn side(&self) -> usize;
     fn total_cells(&self) -> usize;
@@ -72,7 +74,7 @@ impl<S: BoardState> Board<S> {
         }
         GameResult::InProgress
     }
-    
+
     pub fn state(&self) -> &S {
         &self.state
     }

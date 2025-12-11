@@ -1,5 +1,5 @@
-use std::time::Duration;
 use crate::domain::models::{BoardState, Player};
+use std::time::Duration;
 
 pub trait Clock {
     fn now(&self) -> Duration;

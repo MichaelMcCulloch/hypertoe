@@ -627,9 +627,9 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
 
             if available_moves.len() > 1 {
                 // --- REMAINING MOVES SEARCH ---
-                let use_parallel = self.max_depth >= 4; // Lower threshold to use parallelism more often with ID? Or keep high? 
-                // With ID, shallow depths are fast. Parallelism overload might hurt depth 1-3.
-                // Let's stick to >= 4 or 6.
+                let use_parallel = self.max_depth >= 4; // Lower threshold to use parallelism more often with ID? Or keep high?
+                                                        // With ID, shallow depths are fast. Parallelism overload might hurt depth 1-3.
+                                                        // Let's stick to >= 4 or 6.
 
                 let best_move_entry = if use_parallel {
                     available_moves[1..]

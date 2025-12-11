@@ -2,9 +2,9 @@ use crate::domain::models::{BoardState, Player};
 use std::fmt;
 
 const COLOR_RESET: &str = "\x1b[0m";
-const COLOR_X: &str = "\x1b[31m"; 
-const COLOR_O: &str = "\x1b[36m"; 
-const COLOR_DIM: &str = "\x1b[90m"; 
+const COLOR_X: &str = "\x1b[31m";
+const COLOR_O: &str = "\x1b[36m";
+const COLOR_DIM: &str = "\x1b[90m";
 
 struct Canvas {
     width: usize,

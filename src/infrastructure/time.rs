@@ -1,5 +1,5 @@
 use crate::domain::services::Clock;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct SystemClock;
 
@@ -23,7 +23,9 @@ pub struct FakeClock {
 
 impl FakeClock {
     pub fn new(start_time: Duration) -> Self {
-        Self { current_time: start_time }
+        Self {
+            current_time: start_time,
+        }
     }
 
     pub fn advance(&mut self, amount: Duration) {
