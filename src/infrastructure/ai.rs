@@ -115,11 +115,6 @@ impl MinimaxBot {
         } else {
             &board.p2
         };
-        let op = if current_player == Player::X {
-            &board.p2
-        } else {
-            &board.p1
-        };
 
         // Helper to load atomic killer moves once
         let (k0, k1) = if depth < self.killer_moves.len() {
@@ -154,29 +149,19 @@ impl MinimaxBot {
         valid_moves.sort_unstable_by_key(|&idx| {
             let mut score: i32 = 0;
 
-            // 1. Immediate Win Check
-            if me.check_win_with_added_piece(&board.winning_masks, idx) {
+            // 1. TT Hint (Fastest, highest priority)
+            if Some(idx) == best_move_hint {
                 return i32::MAX;
             }
 
-            // 2. Forced Block Check
-            if op.check_win_with_added_piece(&board.winning_masks, idx) {
-                score += 50000;
-            }
-
-            // 3. Killer moves
+            // 2. Killer Moves (Fast atomic check)
             if idx == k0 {
                 score += 10000;
             } else if idx == k1 {
                 score += 9000;
             }
 
-            // 4. Best move hint (from TT)
-            if Some(idx) == best_move_hint {
-                score += 20000;
-            }
-
-            // 5. Strategic value
+            // 3. Strategic value
             score += self.strategic_values[idx] as i32;
 
             score
@@ -185,15 +170,7 @@ impl MinimaxBot {
         // Reverse to have highest score first
         valid_moves.reverse();
 
-        // If the first move is an immediate win, we can prune everything else!
-        // But we need to be careful. The sort key calculation isn't returned, so we can't know for sure here easily
-        // without re-checking or changing the structure.
-        // However, standard minimax will execute the first one, get a winning score, and beta-cutoff anyway (or alpha update).
-        // A slight optimization: check if first move is a win?
-        // Let's stick to the plan of returning the sorted list.
-
-        // OPTIMIZATION from plan: "Found a winning move. Return ONLY this move."
-        // Since we sort, if there is a winning move, it is now at index 0.
+        // One cheap check for immediate win on the best-looking move
         if !valid_moves.is_empty() {
             let first = valid_moves[0];
             if me.check_win_with_added_piece(&board.winning_masks, first) {
@@ -224,8 +201,16 @@ impl MinimaxBot {
         0
     }
 
-    fn calculate_score_delta(&self, board: &BitBoardState, index: usize, player: Player) -> i32 {
+    fn calculate_score_delta(
+        &self,
+        board: &BitBoardState,
+        index: usize,
+        player: Player,
+    ) -> (i32, bool) {
         let mut delta = 0;
+        let mut is_win = false;
+        let side = board.side as u32;
+
         match &*board.winning_masks {
             WinningMasks::Small {
                 cell_mask_lookup, ..
@@ -248,6 +233,15 @@ impl MinimaxBot {
                             Player::X => (x + 1, o),
                             Player::O => (x, o + 1),
                         };
+
+                        // Check for win
+                        if match player {
+                            Player::X => nx == side,
+                            Player::O => no == side,
+                        } {
+                            is_win = true;
+                        }
+
                         let new_score = Self::get_line_score(nx, no);
                         delta += new_score - old_score;
                     }
@@ -274,6 +268,14 @@ impl MinimaxBot {
                             Player::X => (x + 1, o),
                             Player::O => (x, o + 1),
                         };
+
+                        if match player {
+                            Player::X => nx == side,
+                            Player::O => no == side,
+                        } {
+                            is_win = true;
+                        }
+
                         let new_score = Self::get_line_score(nx, no);
                         delta += new_score - old_score;
                     }
@@ -312,13 +314,21 @@ impl MinimaxBot {
                             Player::X => (x + 1, o),
                             Player::O => (x, o + 1),
                         };
+
+                        if match player {
+                            Player::X => nx == side,
+                            Player::O => no == side,
+                        } {
+                            is_win = true;
+                        }
+
                         let new_score = Self::get_line_score(nx, no);
                         delta += new_score - old_score;
                     }
                 }
             }
         }
-        delta
+        (delta, is_win)
     }
 
     fn minimax(
@@ -393,15 +403,15 @@ impl MinimaxBot {
 
         for &idx in moves {
             // Incremental score
-            let score_delta = self.calculate_score_delta(board, idx, current_player);
+            let (score_delta, is_win) = self.calculate_score_delta(board, idx, current_player);
             let next_score = current_score + score_delta;
 
             board.set_cell(idx, current_player).unwrap();
 
             let new_hash = current_hash ^ self.zobrist_keys[idx][p_idx];
 
-            let win = board.p1.check_win_at(&board.winning_masks, idx)
-                || board.p2.check_win_at(&board.winning_masks, idx);
+            // Incremental threat detection replaces explicit check_win_at
+            let win = is_win;
 
             let val = if win {
                 match current_player {
@@ -539,162 +549,182 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
     fn get_best_move(&mut self, board: &BitBoardState, player: Player) -> Option<usize> {
         self.ensure_initialized(board);
 
-        let mut moves_buf = [0usize; 256];
-        let count = self.get_sorted_moves_into(board, &mut moves_buf, None, 0, player);
-        let available_moves = &moves_buf[0..count];
+        let mut best_move = None;
+        let time_limit = std::time::Duration::from_millis(1000);
+        let start_time = std::time::Instant::now();
+        let global_max_depth = self.max_depth;
 
-        if available_moves.is_empty() {
-            return None;
-        }
+        // Iterative Deepening
+        for d in 1..=global_max_depth {
+            self.max_depth = d;
 
-        // --- FIRST MOVE SEQUENTIAL SEARCH ---
-        let first_move = available_moves[0];
-        let mut work_board = board.clone();
+            let mut moves_buf = [0usize; 256];
+            // Helper: pass previous best_move as hint if available. The TT handles this naturally,
+            // but we can also pass it explicitly if we fetched it.
+            // Since we use TT inside minimax, it should pick it up.
+            // For root sort, we might want to check TT for 'best_move_hint' at root.
+            let root_hash = self.calculate_zobrist_hash(board);
+            let best_move_hint =
+                if let Some((_, _, _, mv)) = self.transposition_table.get(root_hash) {
+                    mv.map(|m| m as usize)
+                } else {
+                    best_move
+                };
 
-        let initial_hash = self.calculate_zobrist_hash(&work_board);
-        let initial_score = self.evaluate(board);
+            let count =
+                self.get_sorted_moves_into(board, &mut moves_buf, best_move_hint, 0, player);
+            let available_moves = &moves_buf[0..count];
 
-        let p_idx = match player {
-            Player::X => 0,
-            Player::O => 1,
-        };
-
-        let first_delta = self.calculate_score_delta(board, first_move, player);
-        let first_next_score = initial_score + first_delta;
-
-        work_board.set_cell(first_move, player).unwrap();
-
-        let next_hash = initial_hash ^ self.zobrist_keys[first_move][p_idx];
-
-        let win = work_board
-            .p1
-            .check_win_at(&work_board.winning_masks, first_move)
-            || work_board
-                .p2
-                .check_win_at(&work_board.winning_masks, first_move);
-
-        let first_score = if win {
-            match player {
-                Player::X => 1000,
-                Player::O => -1000,
+            if available_moves.is_empty() {
+                self.max_depth = global_max_depth;
+                return None;
             }
-        } else {
-            self.minimax(
-                &mut work_board,
-                0, // depth 0 for minimax call (actually depth 1 of game)
-                player.opponent(),
-                i32::MIN + 1,
-                i32::MAX - 1,
-                next_hash,
-                first_next_score,
-            )
-        };
 
-        let (alpha, beta) = match player {
-            Player::X => (first_score, i32::MAX - 1),
-            Player::O => (i32::MIN + 1, first_score),
-        };
+            // --- FIRST MOVE SEQUENTIAL SEARCH ---
+            let first_move = available_moves[0];
+            let mut work_board = board.clone();
 
-        if available_moves.len() == 1 {
-            return Some(first_move);
-        }
+            let initial_hash = self.calculate_zobrist_hash(&work_board);
+            let initial_score = self.evaluate(board);
 
-        // --- REMAINING MOVES SEARCH ---
-        // Conditional Parallelism to reduce overhead on shallow searches
-        // If max_depth is small, overhead of Rayon might dominate.
-        // Let's say depth < 6, use sequential.
-        let use_parallel = self.max_depth >= 6;
+            let p_idx = match player {
+                Player::X => 0,
+                Player::O => 1,
+            };
 
-        let best_move_entry = if use_parallel {
-            available_moves[1..]
-                .par_iter()
-                .map(|&mv| {
-                    let mut work_board = board.clone();
-                    let delta = self.calculate_score_delta(board, mv, player);
-                    let next_score = initial_score + delta;
+            let (first_delta, first_is_win) = self.calculate_score_delta(board, first_move, player);
+            let first_next_score = initial_score + first_delta;
 
-                    work_board.set_cell(mv, player).unwrap();
-                    let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
+            work_board.set_cell(first_move, player).unwrap();
 
-                    let win = work_board.p1.check_win_at(&work_board.winning_masks, mv)
-                        || work_board.p2.check_win_at(&work_board.winning_masks, mv);
+            let next_hash = initial_hash ^ self.zobrist_keys[first_move][p_idx];
 
-                    let score = if win {
-                        match player {
-                            Player::X => 1000,
-                            Player::O => -1000,
+            let first_score = if first_is_win {
+                match player {
+                    Player::X => 1000,
+                    Player::O => -1000,
+                }
+            } else {
+                self.minimax(
+                    &mut work_board,
+                    0, // depth 0 for minimax call
+                    player.opponent(),
+                    i32::MIN + 1,
+                    i32::MAX - 1,
+                    next_hash,
+                    first_next_score,
+                )
+            };
+
+            let (alpha, beta) = match player {
+                Player::X => (first_score, i32::MAX - 1),
+                Player::O => (i32::MIN + 1, first_score),
+            };
+
+            let mut current_best = first_move;
+            let current_best_score = first_score;
+
+            if available_moves.len() > 1 {
+                // --- REMAINING MOVES SEARCH ---
+                let use_parallel = self.max_depth >= 4; // Lower threshold to use parallelism more often with ID? Or keep high? 
+                // With ID, shallow depths are fast. Parallelism overload might hurt depth 1-3.
+                // Let's stick to >= 4 or 6.
+
+                let best_move_entry = if use_parallel {
+                    available_moves[1..]
+                        .par_iter()
+                        .map(|&mv| {
+                            let mut work_board = board.clone();
+                            let (delta, is_win) = self.calculate_score_delta(board, mv, player);
+                            let next_score = initial_score + delta;
+
+                            work_board.set_cell(mv, player).unwrap();
+                            let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
+
+                            let score = if is_win {
+                                match player {
+                                    Player::X => 1000,
+                                    Player::O => -1000,
+                                }
+                            } else {
+                                self.minimax(
+                                    &mut work_board,
+                                    0,
+                                    player.opponent(),
+                                    alpha,
+                                    beta,
+                                    next_hash,
+                                    next_score,
+                                )
+                            };
+                            (mv, score)
+                        })
+                        .max_by(|a, b| match player {
+                            Player::X => a.1.cmp(&b.1),
+                            Player::O => b.1.cmp(&a.1),
+                        })
+                } else {
+                    available_moves[1..]
+                        .iter()
+                        .map(|&mv| {
+                            let mut work_board = board.clone();
+                            let (delta, is_win) = self.calculate_score_delta(board, mv, player);
+                            let next_score = initial_score + delta;
+
+                            work_board.set_cell(mv, player).unwrap();
+                            let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
+
+                            let score = if is_win {
+                                match player {
+                                    Player::X => 1000,
+                                    Player::O => -1000,
+                                }
+                            } else {
+                                self.minimax(
+                                    &mut work_board,
+                                    0,
+                                    player.opponent(),
+                                    alpha, // Note: Shared alpha/beta in parallel is naive and doesn't update.
+                                    // But for root node it's okay-ish as we just gather scores.
+                                    // But we essentially do a full search on every branch without pruning across branches in parallel.
+                                    beta,
+                                    next_hash,
+                                    next_score,
+                                )
+                            };
+                            (mv, score)
+                        })
+                        .max_by(|a, b| match player {
+                            Player::X => a.1.cmp(&b.1),
+                            Player::O => b.1.cmp(&a.1),
+                        })
+                };
+
+                if let Some((best_parallel_move, best_parallel_score)) = best_move_entry {
+                    match player {
+                        Player::X => {
+                            if best_parallel_score > current_best_score {
+                                current_best = best_parallel_move;
+                            }
                         }
-                    } else {
-                        self.minimax(
-                            &mut work_board,
-                            0,
-                            player.opponent(),
-                            alpha,
-                            beta,
-                            next_hash,
-                            next_score,
-                        )
-                    };
-                    (mv, score)
-                })
-                .max_by(|a, b| match player {
-                    Player::X => a.1.cmp(&b.1),
-                    Player::O => b.1.cmp(&a.1),
-                })
-        } else {
-            available_moves[1..]
-                .iter()
-                .map(|&mv| {
-                    let mut work_board = board.clone();
-                    let delta = self.calculate_score_delta(board, mv, player);
-                    let next_score = initial_score + delta;
-
-                    work_board.set_cell(mv, player).unwrap();
-                    let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
-
-                    let win = work_board.p1.check_win_at(&work_board.winning_masks, mv)
-                        || work_board.p2.check_win_at(&work_board.winning_masks, mv);
-
-                    let score = if win {
-                        match player {
-                            Player::X => 1000,
-                            Player::O => -1000,
+                        Player::O => {
+                            if best_parallel_score < current_best_score {
+                                current_best = best_parallel_move;
+                            }
                         }
-                    } else {
-                        self.minimax(
-                            &mut work_board,
-                            0,
-                            player.opponent(),
-                            alpha,
-                            beta,
-                            next_hash,
-                            next_score,
-                        )
-                    };
-                    (mv, score)
-                })
-                .max_by(|a, b| match player {
-                    Player::X => a.1.cmp(&b.1),
-                    Player::O => b.1.cmp(&a.1),
-                })
-        };
-
-        if let Some((best_parallel_move, best_parallel_score)) = best_move_entry {
-            match player {
-                Player::X => {
-                    if best_parallel_score > first_score {
-                        return Some(best_parallel_move);
                     }
                 }
-                Player::O => {
-                    if best_parallel_score < first_score {
-                        return Some(best_parallel_move);
-                    }
-                }
+            }
+
+            best_move = Some(current_best);
+
+            if start_time.elapsed() > time_limit {
+                break;
             }
         }
 
-        Some(first_move)
+        self.max_depth = global_max_depth;
+        best_move
     }
 }
 
