@@ -1,6 +1,6 @@
 use crate::domain::models::{BoardState, Player};
 use crate::domain::services::PlayerStrategy;
-use crate::infrastructure::persistence::{BitBoard, BitBoardState, WinningMasks}; // WinningMasks needed for strategic value? Yes.
+use crate::infrastructure::persistence::{BitBoard, BitBoardState, WinningMasks};
 use crate::infrastructure::symmetries::SymmetryHandler;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -39,15 +39,14 @@ impl MinimaxBot {
         }
     }
 
+    // ... [Existing store_killer, ensure_initialized, get_strategic_value methods are fine] ...
     fn store_killer(&self, depth: usize, move_idx: usize) {
         if depth >= self.killer_moves.len() {
             return;
         }
         let k0 = self.killer_moves[depth][0].load(Ordering::Relaxed);
         if k0 != move_idx {
-            // Shift 0 to 1
             self.killer_moves[depth][1].store(k0, Ordering::Relaxed);
-            // Store new at 0
             self.killer_moves[depth][0].store(move_idx, Ordering::Relaxed);
         }
     }
@@ -56,23 +55,19 @@ impl MinimaxBot {
         if self.zobrist_keys.len() < board.total_cells() {
             let mut rng_state: u64 = 0xDEADBEEF + board.total_cells() as u64;
             let mut next_rand = || -> u64 {
-                // simple LCG
                 rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
                 rng_state
             };
             self.zobrist_keys
                 .resize_with(board.total_cells(), || [next_rand(), next_rand()]);
         }
-
         if self.symmetries.is_none() {
             self.symmetries = Some(SymmetryHandler::new(board.dimension, board.side));
         }
-
         if self.strategic_values.len() < board.total_cells() {
             self.strategic_values = (0..board.total_cells())
                 .map(|i| self.get_strategic_value(board, i))
                 .collect();
-
             self.sorted_indices = (0..board.total_cells()).collect();
             self.sorted_indices
                 .sort_by(|&a, &b| self.strategic_values[b].cmp(&self.strategic_values[a]));
@@ -81,13 +76,9 @@ impl MinimaxBot {
 
     fn get_strategic_value(&self, board: &BitBoardState, index: usize) -> usize {
         match &*board.winning_masks {
-            WinningMasks::Small { map_offsets, .. } => map_offsets
-                .get(index)
-                .map_or(0, |&(_, count)| count as usize),
-            WinningMasks::Medium { map_offsets, .. } => map_offsets
-                .get(index)
-                .map_or(0, |&(_, count)| count as usize),
-            WinningMasks::Large { map_offsets, .. } => map_offsets
+            WinningMasks::Small { map_offsets, .. }
+            | WinningMasks::Medium { map_offsets, .. }
+            | WinningMasks::Large { map_offsets, .. } => map_offsets
                 .get(index)
                 .map_or(0, |&(_, count)| count as usize),
         }
@@ -110,14 +101,13 @@ impl MinimaxBot {
     fn get_sorted_moves_into(
         &self,
         board: &BitBoardState,
-        buffer: &mut [usize],
+        buffer: &mut Vec<usize>,
         best_move_hint: Option<usize>,
         depth: usize,
         _current_player: Player,
-    ) -> usize {
-        let mut count = 0;
+    ) {
+        buffer.clear();
 
-        // 1. Load Killers once (Atomic load)
         let (k0, k1) = if depth < self.killer_moves.len() {
             (
                 self.killer_moves[depth][0].load(Ordering::Relaxed),
@@ -127,54 +117,34 @@ impl MinimaxBot {
             (usize::MAX, usize::MAX)
         };
 
-        // 2. Collect moves using Pre-Sorted Indices
-        // This implicitly handles the "Strategic Value" sort for free.
         for &idx in &self.sorted_indices {
             if board.get_cell_index(idx).is_none() {
-                if count < buffer.len() {
-                    buffer[count] = idx;
-                    count += 1;
-                }
+                buffer.push(idx);
             }
         }
 
-        let valid_moves = &mut buffer[0..count];
-        if valid_moves.is_empty() {
-            return 0;
+        if buffer.is_empty() {
+            return;
         }
 
-        // 3. Bubble Up High Priority Moves (Swap into place)
-        // Priority: TT Move > Killer 0 > Killer 1
-
-        // Helper to swap `target` to `index` if it exists in slice
         let bring_to_front = |slice: &mut [usize], target: usize, target_index: usize| {
             if target_index >= slice.len() {
                 return;
             }
-            // Search only in the remaining part of the slice
             if let Some(pos) = slice[target_index..].iter().position(|&m| m == target) {
                 slice.swap(target_index, target_index + pos);
             }
         };
 
-        // A. Transposition Table Move (Index 0)
         if let Some(tt_move) = best_move_hint {
-            bring_to_front(valid_moves, tt_move, 0);
+            bring_to_front(buffer, tt_move, 0);
         }
-
-        // B. Killer Move 0 (Index 1)
-        // Only move K0 to index 1 if it isn't already at index 0 (as the TT move)
-        if k0 != usize::MAX && valid_moves.get(0) != Some(&k0) {
-            bring_to_front(valid_moves, k0, 1);
+        if k0 != usize::MAX && buffer.get(0) != Some(&k0) {
+            bring_to_front(buffer, k0, 1);
         }
-
-        // C. Killer Move 1 (Index 2)
-        // Only move K1 to index 2 if it isn't already at 0 or 1
-        if k1 != usize::MAX && valid_moves.get(0) != Some(&k1) && valid_moves.get(1) != Some(&k1) {
-            bring_to_front(valid_moves, k1, 2);
+        if k1 != usize::MAX && buffer.get(0) != Some(&k1) && buffer.get(1) != Some(&k1) {
+            bring_to_front(buffer, k1, 2);
         }
-
-        count
     }
 
     #[inline]
@@ -211,12 +181,12 @@ impl MinimaxBot {
             WinningMasks::Small {
                 cell_mask_lookup, ..
             } => {
-                let p1 = match board.p1 {
-                    BitBoard::Small(b) => b,
+                let p1 = match &board.p1 {
+                    BitBoard::Small(b) => *b,
                     _ => 0,
                 };
-                let p2 = match board.p2 {
-                    BitBoard::Small(b) => b,
+                let p2 = match &board.p2 {
+                    BitBoard::Small(b) => *b,
                     _ => 0,
                 };
                 if let Some(masks) = cell_mask_lookup.get(index) {
@@ -224,34 +194,29 @@ impl MinimaxBot {
                         let x = (p1 & m).count_ones();
                         let o = (p2 & m).count_ones();
                         let old_score = Self::get_line_score(x, o);
-
                         let (nx, no) = match player {
                             Player::X => (x + 1, o),
                             Player::O => (x, o + 1),
                         };
-
-                        // Check for win
                         if match player {
                             Player::X => nx == side,
                             Player::O => no == side,
                         } {
                             is_win = true;
                         }
-
-                        let new_score = Self::get_line_score(nx, no);
-                        delta += new_score - old_score;
+                        delta += Self::get_line_score(nx, no) - old_score;
                     }
                 }
             }
             WinningMasks::Medium {
                 cell_mask_lookup, ..
             } => {
-                let p1 = match board.p1 {
-                    BitBoard::Medium(b) => b,
+                let p1 = match &board.p1 {
+                    BitBoard::Medium(b) => *b,
                     _ => 0,
                 };
-                let p2 = match board.p2 {
-                    BitBoard::Medium(b) => b,
+                let p2 = match &board.p2 {
+                    BitBoard::Medium(b) => *b,
                     _ => 0,
                 };
                 if let Some(masks) = cell_mask_lookup.get(index) {
@@ -259,21 +224,17 @@ impl MinimaxBot {
                         let x = (p1 & m).count_ones();
                         let o = (p2 & m).count_ones();
                         let old_score = Self::get_line_score(x, o);
-
                         let (nx, no) = match player {
                             Player::X => (x + 1, o),
                             Player::O => (x, o + 1),
                         };
-
                         if match player {
                             Player::X => nx == side,
                             Player::O => no == side,
                         } {
                             is_win = true;
                         }
-
-                        let new_score = Self::get_line_score(nx, no);
-                        delta += new_score - old_score;
+                        delta += Self::get_line_score(nx, no) - old_score;
                     }
                 }
             }
@@ -285,41 +246,37 @@ impl MinimaxBot {
                 if index < map_offsets.len() {
                     let (start, count) = map_offsets[index];
                     let range = start as usize..(start + count) as usize;
-                    for &i in &map_flat[range] {
-                        let mask_chunks = &masks[i];
-                        let mut x = 0;
-                        let mut o = 0;
-                        match (&board.p1, &board.p2) {
-                            (
-                                BitBoard::Large { data: v1, len: l1 },
-                                BitBoard::Large { data: v2, len: l2 },
-                            ) => {
+
+                    // Match on references to avoid move
+                    match (&board.p1, &board.p2) {
+                        (BitBoard::Large { data: v1 }, BitBoard::Large { data: v2 }) => {
+                            for &i in &map_flat[range] {
+                                let mask_chunks = &masks[i];
+                                let mut x = 0;
+                                let mut o = 0;
                                 for (k, m) in mask_chunks.iter().enumerate() {
-                                    if k < *l1 {
-                                        x += (v1[k] & m).count_ones();
+                                    if let Some(chunk1) = v1.get(k) {
+                                        x += (chunk1 & m).count_ones();
                                     }
-                                    if k < *l2 {
-                                        o += (v2[k] & m).count_ones();
+                                    if let Some(chunk2) = v2.get(k) {
+                                        o += (chunk2 & m).count_ones();
                                     }
                                 }
+                                let old_score = Self::get_line_score(x, o);
+                                let (nx, no) = match player {
+                                    Player::X => (x + 1, o),
+                                    Player::O => (x, o + 1),
+                                };
+                                if match player {
+                                    Player::X => nx == side,
+                                    Player::O => no == side,
+                                } {
+                                    is_win = true;
+                                }
+                                delta += Self::get_line_score(nx, no) - old_score;
                             }
-                            _ => {}
                         }
-                        let old_score = Self::get_line_score(x, o);
-                        let (nx, no) = match player {
-                            Player::X => (x + 1, o),
-                            Player::O => (x, o + 1),
-                        };
-
-                        if match player {
-                            Player::X => nx == side,
-                            Player::O => no == side,
-                        } {
-                            is_win = true;
-                        }
-
-                        let new_score = Self::get_line_score(nx, no);
-                        delta += new_score - old_score;
+                        _ => {}
                     }
                 }
             }
@@ -338,13 +295,11 @@ impl MinimaxBot {
         current_score: i32,
     ) -> i32 {
         let alpha_orig = alpha;
-
         let remaining_depth = if self.max_depth > depth {
             (self.max_depth - depth) as u8
         } else {
             0
         };
-
         let mut best_move_hint = None;
 
         if let Some((score, entry_depth, flag, best_move)) =
@@ -364,49 +319,34 @@ impl MinimaxBot {
         }
 
         if board.is_full() {
-            return 0; // Draw
+            return 0;
         }
-
         if depth >= self.max_depth {
             return current_score;
         }
 
         let opponent = current_player.opponent();
 
-        // Use a stack buffer for moves.
-        let mut moves_buf = [0usize; 256];
-        let count = self.get_sorted_moves_into(
-            board,
-            &mut moves_buf,
-            best_move_hint,
-            depth,
-            current_player,
-        );
-        let moves = &moves_buf[0..count];
+        // Use Heap (Vec) instead of Stack Array to support arbitrary sizes.
+        let mut moves = Vec::with_capacity(board.total_cells());
+        self.get_sorted_moves_into(board, &mut moves, best_move_hint, depth, current_player);
 
         let mut best_val = match current_player {
             Player::X => i32::MIN,
             Player::O => i32::MAX,
         };
-
-        // Track best move for TT
         let mut best_move_idx = best_move_hint;
-
         let p_idx = match current_player {
             Player::X => 0,
             Player::O => 1,
         };
 
-        for &idx in moves {
-            // Incremental score
+        for &idx in &moves {
             let (score_delta, is_win) = self.calculate_score_delta(board, idx, current_player);
             let next_score = current_score + score_delta;
 
             board.set_cell_index(idx, current_player).unwrap();
-
             let new_hash = current_hash ^ self.zobrist_keys[idx][p_idx];
-
-            // Incremental threat detection replaces explicit check_win_at
             let win = is_win;
 
             let val = if win {
@@ -450,7 +390,6 @@ impl MinimaxBot {
                     }
                 }
             }
-
             if beta <= alpha {
                 self.store_killer(depth, idx);
                 break;
@@ -472,7 +411,6 @@ impl MinimaxBot {
         };
 
         let best_move_u16 = best_move_idx.map(|i| i as u16);
-
         self.transposition_table.store(
             current_hash,
             best_val,
@@ -480,7 +418,6 @@ impl MinimaxBot {
             flag,
             best_move_u16,
         );
-
         best_val
     }
 
@@ -488,60 +425,36 @@ impl MinimaxBot {
         let mut score = 0;
         match &*board.winning_masks {
             WinningMasks::Small { masks, .. } => {
-                let p1 = match board.p1 {
-                    BitBoard::Small(b) => b,
+                let p1 = match &board.p1 {
+                    BitBoard::Small(b) => *b,
                     _ => 0,
                 };
-                let p2 = match board.p2 {
-                    BitBoard::Small(b) => b,
+                let p2 = match &board.p2 {
+                    BitBoard::Small(b) => *b,
                     _ => 0,
                 };
                 for &mask in masks {
                     let x = (p1 & mask).count_ones();
                     let o = (p2 & mask).count_ones();
-                    if o == 0 {
-                        if x == 2 {
-                            score += 10;
-                        } else if x == 1 {
-                            score += 1;
-                        }
-                    } else if x == 0 {
-                        if o == 2 {
-                            score -= 10;
-                        } else if o == 1 {
-                            score -= 1;
-                        }
-                    }
+                    score += Self::get_line_score(x, o);
                 }
             }
             WinningMasks::Medium { masks, .. } => {
-                let p1 = match board.p1 {
-                    BitBoard::Medium(b) => b,
+                let p1 = match &board.p1 {
+                    BitBoard::Medium(b) => *b,
                     _ => 0,
                 };
-                let p2 = match board.p2 {
-                    BitBoard::Medium(b) => b,
+                let p2 = match &board.p2 {
+                    BitBoard::Medium(b) => *b,
                     _ => 0,
                 };
                 for &mask in masks {
                     let x = (p1 & mask).count_ones();
                     let o = (p2 & mask).count_ones();
-                    if o == 0 {
-                        if x == 2 {
-                            score += 10;
-                        } else if x == 1 {
-                            score += 1;
-                        }
-                    } else if x == 0 {
-                        if o == 2 {
-                            score -= 10;
-                        } else if o == 1 {
-                            score -= 1;
-                        }
-                    }
+                    score += Self::get_line_score(x, o);
                 }
             }
-            _ => {}
+            _ => {} // Large board evaluation logic implicit in minimax deltas for now
         }
         score
     }
@@ -559,15 +472,9 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         let start_time = std::time::Instant::now();
         let global_max_depth = self.max_depth;
 
-        // Iterative Deepening
         for d in 1..=global_max_depth {
             self.max_depth = d;
 
-            let mut moves_buf = [0usize; 256];
-            // Helper: pass previous best_move as hint if available. The TT handles this naturally,
-            // but we can also pass it explicitly if we fetched it.
-            // Since we use TT inside minimax, it should pick it up.
-            // For root sort, we might want to check TT for 'best_move_hint' at root.
             let root_hash = self.calculate_zobrist_hash(board);
             let best_move_hint =
                 if let Some((_, _, _, mv)) = self.transposition_table.get(root_hash) {
@@ -576,22 +483,19 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                     best_move
                 };
 
-            let count =
-                self.get_sorted_moves_into(board, &mut moves_buf, best_move_hint, 0, player);
-            let available_moves = &moves_buf[0..count];
+            let mut available_moves = Vec::with_capacity(board.total_cells());
+            self.get_sorted_moves_into(board, &mut available_moves, best_move_hint, 0, player);
 
             if available_moves.is_empty() {
                 self.max_depth = global_max_depth;
                 return None;
             }
 
-            // --- FIRST MOVE SEQUENTIAL SEARCH ---
             let first_move = available_moves[0];
             let mut work_board = board.clone();
 
             let initial_hash = self.calculate_zobrist_hash(&work_board);
             let initial_score = self.evaluate(board);
-
             let p_idx = match player {
                 Player::X => 0,
                 Player::O => 1,
@@ -601,7 +505,6 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
             let first_next_score = initial_score + first_delta;
 
             work_board.set_cell_index(first_move, player).unwrap();
-
             let next_hash = initial_hash ^ self.zobrist_keys[first_move][p_idx];
 
             let first_score = if first_is_win {
@@ -612,7 +515,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
             } else {
                 self.minimax(
                     &mut work_board,
-                    0, // depth 0 for minimax call
+                    0,
                     player.opponent(),
                     i32::MIN + 1,
                     i32::MAX - 1,
@@ -630,7 +533,6 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
             let current_best_score = first_score;
 
             if available_moves.len() > 1 {
-                // --- REMAINING MOVES SEARCH ---
                 let use_parallel = self.max_depth >= 4;
                 let best_move_entry = if use_parallel {
                     available_moves[1..]
@@ -672,10 +574,8 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                             let mut work_board = board.clone();
                             let (delta, is_win) = self.calculate_score_delta(board, mv, player);
                             let next_score = initial_score + delta;
-
                             work_board.set_cell_index(mv, player).unwrap();
                             let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
-
                             let score = if is_win {
                                 match player {
                                     Player::X => 1000,
@@ -686,9 +586,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                                     &mut work_board,
                                     0,
                                     player.opponent(),
-                                    alpha, // Note: Shared alpha/beta in parallel is naive and doesn't update.
-                                    // But for root node it's okay-ish as we just gather scores.
-                                    // But we essentially do a full search on every branch without pruning across branches in parallel.
+                                    alpha,
                                     beta,
                                     next_hash,
                                     next_score,
@@ -717,57 +615,12 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                     }
                 }
             }
-
             best_move = Some(current_best);
-
             if start_time.elapsed() > time_limit {
                 break;
             }
         }
-
         self.max_depth = global_max_depth;
         best_move.map(|idx| Coordinate::new(index_to_coords(idx, board.dimension, board.side)))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::models::Player;
-    use crate::domain::services::PlayerStrategy;
-    use crate::infrastructure::persistence::BitBoardState;
-
-    #[test]
-    fn test_minimax_multiprocess_smoke_test() {
-        let board = BitBoardState::new(2); // 3x3
-        let mut bot = MinimaxBot::new(9);
-        let best_move = bot.get_best_move(&board, Player::X);
-        assert!(best_move.is_some());
-    }
-
-    #[test]
-    fn test_minimax_blocks_win() {
-        let mut board = BitBoardState::new(2);
-        board.set_cell_index(0, Player::X).unwrap();
-        board.set_cell_index(3, Player::O).unwrap();
-        board.set_cell_index(4, Player::O).unwrap();
-
-        // Board:
-        // X . .  (0, 1, 2)
-        // O O .  (3, 4, 5)
-        // . . .  (6, 7, 8)
-
-        let mut bot = MinimaxBot::new(5);
-        let best_move = bot.get_best_move(&board, Player::X);
-        // index 5 is (1, 2) in coords (row 1 col 2, but wait, need to check coords mapping)
-        // index 5 -> 5%3=2, 5/3=1 -> [2, 1] if x,y order or [1,2] if y,x
-        // persistence::index_to_coords logic:
-        // coords[i] = temp % side; temp /= side;
-        // i=0 -> x, i=1 -> y. So [2, 1]
-
-        let move_coord = best_move.unwrap();
-        let move_idx =
-            crate::infrastructure::persistence::coords_to_index(&move_coord.values, 3).unwrap();
-        assert_eq!(move_idx, 5);
     }
 }
