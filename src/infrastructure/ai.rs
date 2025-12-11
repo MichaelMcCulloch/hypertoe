@@ -8,22 +8,44 @@ use std::sync::Arc;
 pub mod transposition;
 use transposition::{Flag, LockFreeTT};
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 pub struct MinimaxBot {
     transposition_table: Arc<LockFreeTT>,
     zobrist_keys: Vec<[u64; 2]>,
-    symmetries: Option<SymmetryHandler>, // Kept if needed for future, or initialization
+    symmetries: Option<SymmetryHandler>,
     max_depth: usize,
     strategic_values: Vec<usize>,
+    killer_moves: Vec<[AtomicUsize; 2]>,
 }
 
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
+        let mut killer_moves = Vec::with_capacity(max_depth + 1);
+        for _ in 0..=max_depth {
+            killer_moves.push([AtomicUsize::new(usize::MAX), AtomicUsize::new(usize::MAX)]);
+        }
+
         MinimaxBot {
-            transposition_table: Arc::new(LockFreeTT::new(64)), // Default 64MB
+            transposition_table: Arc::new(LockFreeTT::new(64)),
             zobrist_keys: Vec::new(),
             symmetries: None,
             max_depth,
             strategic_values: Vec::new(),
+            killer_moves,
+        }
+    }
+
+    fn store_killer(&self, depth: usize, move_idx: usize) {
+        if depth >= self.killer_moves.len() {
+            return;
+        }
+        let k0 = self.killer_moves[depth][0].load(Ordering::Relaxed);
+        if k0 != move_idx {
+            // Shift 0 to 1
+            self.killer_moves[depth][1].store(k0, Ordering::Relaxed);
+            // Store new at 0
+            self.killer_moves[depth][0].store(move_idx, Ordering::Relaxed);
         }
     }
 
@@ -83,6 +105,7 @@ impl MinimaxBot {
         board: &BitBoardState,
         buffer: &mut [usize],
         best_move_hint: Option<usize>,
+        depth: usize,
     ) -> usize {
         let mut count = 0;
         for idx in 0..board.total_cells() {
@@ -95,6 +118,20 @@ impl MinimaxBot {
         }
 
         let valid_moves = &mut buffer[0..count];
+
+        let k0 = if depth < self.killer_moves.len() {
+            self.killer_moves[depth][0].load(Ordering::Relaxed)
+        } else {
+            usize::MAX
+        };
+        let k1 = if depth < self.killer_moves.len() {
+            self.killer_moves[depth][1].load(Ordering::Relaxed)
+        } else {
+            usize::MAX
+        };
+        let killer0 = if k0 == usize::MAX { None } else { Some(k0) };
+        let killer1 = if k1 == usize::MAX { None } else { Some(k1) };
+
         // Sort in place using simple heuristics and hint
         valid_moves.sort_unstable_by(|&a, &b| {
             if Some(a) == best_move_hint {
@@ -103,6 +140,16 @@ impl MinimaxBot {
             if Some(b) == best_move_hint {
                 return std::cmp::Ordering::Greater;
             }
+
+            let is_k_a = Some(a) == killer0 || Some(a) == killer1;
+            let is_k_b = Some(b) == killer0 || Some(b) == killer1;
+            if is_k_a && !is_k_b {
+                return std::cmp::Ordering::Less;
+            }
+            if !is_k_a && is_k_b {
+                return std::cmp::Ordering::Greater;
+            }
+
             self.strategic_values[b].cmp(&self.strategic_values[a])
         });
 
@@ -158,7 +205,7 @@ impl MinimaxBot {
 
         // Use a stack buffer for moves.
         let mut moves_buf = [0usize; 256];
-        let count = self.get_sorted_moves_into(board, &mut moves_buf, best_move_hint);
+        let count = self.get_sorted_moves_into(board, &mut moves_buf, best_move_hint, depth);
         let moves = &moves_buf[0..count];
 
         let mut best_val = match current_player {
@@ -211,6 +258,7 @@ impl MinimaxBot {
             }
 
             if beta <= alpha {
+                self.store_killer(depth, idx);
                 break;
             }
         }
@@ -320,7 +368,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         self.ensure_initialized(board);
 
         let mut moves_buf = [0usize; 256];
-        let count = self.get_sorted_moves_into(board, &mut moves_buf, None);
+        let count = self.get_sorted_moves_into(board, &mut moves_buf, None, 0);
         let available_moves = &moves_buf[0..count];
 
         if available_moves.is_empty() {

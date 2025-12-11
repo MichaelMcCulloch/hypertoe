@@ -22,6 +22,7 @@ pub enum WinningMasks {
         masks: Vec<u128>,
         map_flat: Vec<usize>,
         map_offsets: Vec<(u32, u32)>,
+        cell_mask_lookup: Vec<Vec<u128>>,
     },
     Large {
         masks: Vec<Vec<u64>>,
@@ -249,16 +250,11 @@ impl BitBoard {
             (
                 BitBoard::Medium(board),
                 WinningMasks::Medium {
-                    masks,
-                    map_flat,
-                    map_offsets,
+                    cell_mask_lookup, ..
                 },
             ) => {
-                if index < map_offsets.len() {
-                    let (start, count) = map_offsets[index];
-                    let range = start as usize..(start + count) as usize;
-                    for &i in &map_flat[range] {
-                        let m = masks[i];
+                if let Some(masks_for_cell) = cell_mask_lookup.get(index) {
+                    for &m in masks_for_cell {
                         if (board & m) == m {
                             return true;
                         }
@@ -336,17 +332,24 @@ fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
         }
     } else if total_cells <= 128 {
         let mut masks = Vec::new();
+        let mut cell_mask_lookup = vec![Vec::new(); total_cells];
+
         for line in lines_indices {
             let mut mask: u128 = 0;
-            for idx in line {
+            for &idx in &line {
                 mask |= 1 << idx;
             }
             masks.push(mask);
+
+            for idx in line {
+                cell_mask_lookup[idx].push(mask);
+            }
         }
         WinningMasks::Medium {
             masks,
             map_flat,
             map_offsets,
+            cell_mask_lookup,
         }
     } else {
         let mut masks = Vec::new();
