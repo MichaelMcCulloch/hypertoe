@@ -1,54 +1,59 @@
-use crate::domain::models::{BoardState, Game, GameResult, Player};
+use crate::domain::models::{Board, BoardState, GameResult, Player};
 use crate::domain::services::{Clock, PlayerStrategy};
 use std::fmt::Display;
-use std::time::Duration;
 
-pub struct GameService<'a, S: BoardState, C: Clock> {
-    game: Game<S>,
-    clock: C,
-    player_x: Box<dyn PlayerStrategy<S> + 'a>,
+pub struct GameService<'a, S: BoardState> {
+    board: Board<S>,
+    player_x: Box<dyn PlayerStrategy<S> + 'a>, // Boxing traits requires lifetime if they capture env?
     player_o: Box<dyn PlayerStrategy<S> + 'a>,
+    turn: Player,
 }
 
-impl<'a, S: BoardState + Display, C: Clock> GameService<'a, S, C> {
+impl<'a, S: BoardState + Display> GameService<'a, S> {
     pub fn new(
-        game: Game<S>,
-        clock: C,
+        board: Board<S>,
         player_x: Box<dyn PlayerStrategy<S> + 'a>,
         player_o: Box<dyn PlayerStrategy<S> + 'a>,
     ) -> Self {
         GameService {
-            game,
-            clock,
+            board,
             player_x,
             player_o,
+            turn: Player::X,
         }
     }
 
-    pub fn board_state(&self) -> &S {
-        self.game.board().state()
+    pub fn board(&self) -> &Board<S> {
+        &self.board
     }
 
-    pub fn check_status(&self) -> GameResult {
-        self.game.status()
+    pub fn turn(&self) -> Player {
+        self.turn
     }
 
-    pub fn current_turn_info(&self) -> (Player, Duration) {
-        (self.game.current_player(), self.clock.now())
+    pub fn is_game_over(&self) -> Option<GameResult> {
+        match self.board.check_status() {
+            GameResult::InProgress => None,
+            result => Some(result),
+        }
     }
 
-    pub fn play_next_turn(&mut self) -> Result<GameResult, String> {
-        let current_player = self.game.current_player();
+    pub fn perform_next_move(&mut self) -> Result<(), String> {
+        if self.is_game_over().is_some() {
+            return Err("Game is over".to_string());
+        }
 
-        let strategy = match current_player {
+        let strategy = match self.turn {
             Player::X => &mut self.player_x,
             Player::O => &mut self.player_o,
         };
 
-        if let Some(coord) = strategy.get_best_move(self.game.board().state(), current_player) {
-            self.game.play_turn(coord)
+        if let Some(coord) = strategy.get_best_move(self.board.state(), self.turn) {
+            self.board.make_move(coord, self.turn)?;
+            self.turn = self.turn.opponent();
+            Ok(())
         } else {
-            Err("Strategy returned no move".to_string())
+            Err("No move available".to_string())
         }
     }
 }
