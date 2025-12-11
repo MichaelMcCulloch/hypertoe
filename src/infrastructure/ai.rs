@@ -19,6 +19,11 @@ pub struct MinimaxBot {
     killer_moves: Vec<[AtomicUsize; 2]>,
 }
 
+struct MoveScore {
+    index: usize,
+    score: i32,
+}
+
 impl MinimaxBot {
     pub fn new(max_depth: usize) -> Self {
         let mut killer_moves = Vec::with_capacity(max_depth + 1);
@@ -109,29 +114,6 @@ impl MinimaxBot {
         current_player: Player,
     ) -> usize {
         let mut count = 0;
-        for idx in 0..board.total_cells() {
-            if board.get_cell(idx).is_none() {
-                if count < buffer.len() {
-                    buffer[count] = idx;
-                    count += 1;
-                }
-            }
-        }
-
-        let valid_moves = &mut buffer[0..count];
-
-        let k0 = if depth < self.killer_moves.len() {
-            self.killer_moves[depth][0].load(Ordering::Relaxed)
-        } else {
-            usize::MAX
-        };
-        let k1 = if depth < self.killer_moves.len() {
-            self.killer_moves[depth][1].load(Ordering::Relaxed)
-        } else {
-            usize::MAX
-        };
-        let killer0 = if k0 == usize::MAX { None } else { Some(k0) };
-        let killer1 = if k1 == usize::MAX { None } else { Some(k1) };
 
         let me = if current_player == Player::X {
             &board.p1
@@ -144,49 +126,81 @@ impl MinimaxBot {
             &board.p1
         };
 
-        // Sort in place using heuristics
-        valid_moves.sort_unstable_by(|&a, &b| {
-            if Some(a) == best_move_hint {
-                return std::cmp::Ordering::Less;
-            }
-            if Some(b) == best_move_hint {
-                return std::cmp::Ordering::Greater;
+        let mut blocking_moves = Vec::new(); // Small capacity optimization?
+        let mut other_moves = Vec::with_capacity(board.total_cells());
+
+        // Helper to load atomic killer moves once
+        let (k0, k1) = if depth < self.killer_moves.len() {
+            (
+                self.killer_moves[depth][0].load(Ordering::Relaxed),
+                self.killer_moves[depth][1].load(Ordering::Relaxed),
+            )
+        } else {
+            (usize::MAX, usize::MAX)
+        };
+
+        for idx in 0..board.total_cells() {
+            if board.get_cell(idx).is_some() {
+                continue;
             }
 
-            // Winning Move Check
-            let a_wins = me.check_win_with_added_piece(&board.winning_masks, a);
-            let b_wins = me.check_win_with_added_piece(&board.winning_masks, b);
-            if a_wins != b_wins {
-                return if a_wins {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                };
+            // 1. Immediate Win Check (Pruning)
+            if me.check_win_with_added_piece(&board.winning_masks, idx) {
+                // Found a winning move. Return ONLY this move.
+                if !buffer.is_empty() {
+                    buffer[0] = idx;
+                    return 1;
+                }
+                // Should not happen if buffer len > 0, but safety check
+                return 0;
             }
 
-            // Forced Move Check
-            let a_blocks = op.check_win_with_added_piece(&board.winning_masks, a);
-            let b_blocks = op.check_win_with_added_piece(&board.winning_masks, b);
-            if a_blocks != b_blocks {
-                return if a_blocks {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                };
+            // 2. Forced Block Check
+            if op.check_win_with_added_piece(&board.winning_masks, idx) {
+                blocking_moves.push(idx);
+                continue;
             }
 
-            let is_k_a = Some(a) == killer0 || Some(a) == killer1;
-            let is_k_b = Some(b) == killer0 || Some(b) == killer1;
-            if is_k_a != is_k_b {
-                return if is_k_a {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                };
+            // 3. Calculate score for other moves
+            let mut score = 0;
+
+            // Killer moves
+            if idx == k0 {
+                score += 10000;
+            } else if idx == k1 {
+                score += 9000;
             }
 
-            self.strategic_values[b].cmp(&self.strategic_values[a])
-        });
+            // Best move hint (from TT)
+            if Some(idx) == best_move_hint {
+                score += 20000;
+            }
+
+            // Static strategic value
+            score += self.strategic_values[idx] as i32;
+
+            other_moves.push(MoveScore { index: idx, score });
+        }
+
+        // 4. Populate buffer
+
+        // Priority 1: Blocking moves
+        for idx in blocking_moves {
+            if count < buffer.len() {
+                buffer[count] = idx;
+                count += 1;
+            }
+        }
+
+        // Priority 2: Other moves sorted by score
+        other_moves.sort_unstable_by(|a, b| b.score.cmp(&a.score)); // Descending
+
+        for ms in other_moves {
+            if count < buffer.len() {
+                buffer[count] = ms.index;
+                count += 1;
+            }
+        }
 
         count
     }
