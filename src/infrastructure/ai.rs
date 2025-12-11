@@ -17,6 +17,7 @@ pub struct MinimaxBot {
     max_depth: usize,
     strategic_values: Vec<usize>,
     killer_moves: Vec<[AtomicUsize; 2]>,
+    sorted_indices: Vec<usize>,
 }
 
 impl MinimaxBot {
@@ -33,6 +34,7 @@ impl MinimaxBot {
             max_depth,
             strategic_values: Vec::new(),
             killer_moves,
+            sorted_indices: Vec::new(),
         }
     }
 
@@ -69,6 +71,10 @@ impl MinimaxBot {
             self.strategic_values = (0..board.total_cells())
                 .map(|i| self.get_strategic_value(board, i))
                 .collect();
+
+            self.sorted_indices = (0..board.total_cells()).collect();
+            self.sorted_indices
+                .sort_by(|&a, &b| self.strategic_values[b].cmp(&self.strategic_values[a]));
         }
     }
 
@@ -106,17 +112,11 @@ impl MinimaxBot {
         buffer: &mut [usize],
         best_move_hint: Option<usize>,
         depth: usize,
-        current_player: Player,
+        _current_player: Player,
     ) -> usize {
         let mut count = 0;
 
-        let me = if current_player == Player::X {
-            &board.p1
-        } else {
-            &board.p2
-        };
-
-        // Helper to load atomic killer moves once
+        // 1. Load Killers once (Atomic load)
         let (k0, k1) = if depth < self.killer_moves.len() {
             (
                 self.killer_moves[depth][0].load(Ordering::Relaxed),
@@ -126,8 +126,9 @@ impl MinimaxBot {
             (usize::MAX, usize::MAX)
         };
 
-        // 1. Collect all valid moves into buffer
-        for idx in 0..board.total_cells() {
+        // 2. Collect moves using Pre-Sorted Indices
+        // This implicitly handles the "Strategic Value" sort for free.
+        for &idx in &self.sorted_indices {
             if board.get_cell(idx).is_none() {
                 if count < buffer.len() {
                     buffer[count] = idx;
@@ -137,45 +138,39 @@ impl MinimaxBot {
         }
 
         let valid_moves = &mut buffer[0..count];
+        if valid_moves.is_empty() {
+            return 0;
+        }
 
-        // 2. Score moves
-        // We want to sort descending by score.
-        // We can use sorting with a key.
-        // Win = MAX priority
-        // Block = High priority
-        // Killer = Medium priority
-        // Strategic = Low priority
+        // 3. Bubble Up High Priority Moves (Swap into place)
+        // Priority: TT Move > Killer 0 > Killer 1
 
-        valid_moves.sort_unstable_by_key(|&idx| {
-            let mut score: i32 = 0;
-
-            // 1. TT Hint (Fastest, highest priority)
-            if Some(idx) == best_move_hint {
-                return i32::MAX;
+        // Helper to swap `target` to `index` if it exists in slice
+        let bring_to_front = |slice: &mut [usize], target: usize, target_index: usize| {
+            if target_index >= slice.len() {
+                return;
             }
-
-            // 2. Killer Moves (Fast atomic check)
-            if idx == k0 {
-                score += 10000;
-            } else if idx == k1 {
-                score += 9000;
+            // Search only in the remaining part of the slice
+            if let Some(pos) = slice[target_index..].iter().position(|&m| m == target) {
+                slice.swap(target_index, target_index + pos);
             }
+        };
 
-            // 3. Strategic value
-            score += self.strategic_values[idx] as i32;
+        // A. Transposition Table Move (Index 0)
+        if let Some(tt_move) = best_move_hint {
+            bring_to_front(valid_moves, tt_move, 0);
+        }
 
-            score
-        });
+        // B. Killer Move 0 (Index 1)
+        // Only move K0 to index 1 if it isn't already at index 0 (as the TT move)
+        if k0 != usize::MAX && valid_moves.get(0) != Some(&k0) {
+            bring_to_front(valid_moves, k0, 1);
+        }
 
-        // Reverse to have highest score first
-        valid_moves.reverse();
-
-        // One cheap check for immediate win on the best-looking move
-        if !valid_moves.is_empty() {
-            let first = valid_moves[0];
-            if me.check_win_with_added_piece(&board.winning_masks, first) {
-                return 1;
-            }
+        // C. Killer Move 1 (Index 2)
+        // Only move K1 to index 2 if it isn't already at 0 or 1
+        if k1 != usize::MAX && valid_moves.get(0) != Some(&k1) && valid_moves.get(1) != Some(&k1) {
+            bring_to_front(valid_moves, k1, 2);
         }
 
         count
@@ -439,6 +434,9 @@ impl MinimaxBot {
                         best_move_idx = Some(idx);
                     }
                     alpha = alpha.max(val);
+                    if val > 900 {
+                        break;
+                    }
                 }
                 Player::O => {
                     if val < best_val {
@@ -446,6 +444,9 @@ impl MinimaxBot {
                         best_move_idx = Some(idx);
                     }
                     beta = beta.min(val);
+                    if val < -900 {
+                        break;
+                    }
                 }
             }
 
