@@ -17,6 +17,7 @@ pub enum WinningMasks {
         masks: Vec<u32>,
         map_flat: Vec<usize>,
         map_offsets: Vec<(u32, u32)>, // (start, count)
+        cell_mask_lookup: Vec<Vec<u32>>,
     },
     Medium {
         masks: Vec<u128>,
@@ -230,16 +231,11 @@ impl BitBoard {
             (
                 BitBoard::Small(board),
                 WinningMasks::Small {
-                    masks,
-                    map_flat,
-                    map_offsets,
+                    cell_mask_lookup, ..
                 },
             ) => {
-                if index < map_offsets.len() {
-                    let (start, count) = map_offsets[index];
-                    let range = start as usize..(start + count) as usize;
-                    for &i in &map_flat[range] {
-                        let m = masks[i];
+                if let Some(masks_for_cell) = cell_mask_lookup.get(index) {
+                    for &m in masks_for_cell {
                         if (board & m) == m {
                             return true;
                         }
@@ -289,6 +285,81 @@ impl BitBoard {
             _ => false,
         }
     }
+
+    pub fn check_win_with_added_piece(&self, winning_masks: &WinningMasks, index: usize) -> bool {
+        match (self, winning_masks) {
+            (
+                BitBoard::Small(board),
+                WinningMasks::Small {
+                    cell_mask_lookup, ..
+                },
+            ) => {
+                if let Some(masks_for_cell) = cell_mask_lookup.get(index) {
+                    let bit = 1 << index;
+                    for &m in masks_for_cell {
+                        if (*board & m) == (m & !bit) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            (
+                BitBoard::Medium(board),
+                WinningMasks::Medium {
+                    cell_mask_lookup, ..
+                },
+            ) => {
+                if let Some(masks_for_cell) = cell_mask_lookup.get(index) {
+                    let bit = 1u128 << index;
+                    for &m in masks_for_cell {
+                        if (*board & m) == (m & !bit) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            (
+                BitBoard::Large(board),
+                WinningMasks::Large {
+                    masks,
+                    map_flat,
+                    map_offsets,
+                },
+            ) => {
+                if index < map_offsets.len() {
+                    let (start, count) = map_offsets[index];
+                    let range = start as usize..(start + count) as usize;
+                    let vec_idx = index / 64;
+                    let bit_val = 1u64 << (index % 64);
+
+                    for &i in &map_flat[range] {
+                        let mask_chunks = &masks[i];
+                        let mut match_all = true;
+                        for (k, (&b, &m)) in board.iter().zip(mask_chunks.iter()).enumerate() {
+                            if k == vec_idx {
+                                if (b & m) != (m & !bit_val) {
+                                    match_all = false;
+                                    break;
+                                }
+                            } else {
+                                if (b & m) != m {
+                                    match_all = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if match_all {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
 }
 
 // --- Mask Generation Logic ---
@@ -318,17 +389,24 @@ fn generate_winning_masks(dimension: usize, side: usize) -> WinningMasks {
 
     if total_cells <= 32 {
         let mut masks = Vec::new();
+        let mut cell_mask_lookup = vec![Vec::new(); total_cells];
+
         for line in lines_indices {
             let mut mask: u32 = 0;
-            for idx in line {
+            for &idx in &line {
                 mask |= 1 << idx;
             }
             masks.push(mask);
+
+            for idx in line {
+                cell_mask_lookup[idx].push(mask);
+            }
         }
         WinningMasks::Small {
             masks,
             map_flat,
             map_offsets,
+            cell_mask_lookup,
         }
     } else if total_cells <= 128 {
         let mut masks = Vec::new();

@@ -106,6 +106,7 @@ impl MinimaxBot {
         buffer: &mut [usize],
         best_move_hint: Option<usize>,
         depth: usize,
+        current_player: Player,
     ) -> usize {
         let mut count = 0;
         for idx in 0..board.total_cells() {
@@ -132,7 +133,18 @@ impl MinimaxBot {
         let killer0 = if k0 == usize::MAX { None } else { Some(k0) };
         let killer1 = if k1 == usize::MAX { None } else { Some(k1) };
 
-        // Sort in place using simple heuristics and hint
+        let me = if current_player == Player::X {
+            &board.p1
+        } else {
+            &board.p2
+        };
+        let op = if current_player == Player::X {
+            &board.p2
+        } else {
+            &board.p1
+        };
+
+        // Sort in place using heuristics
         valid_moves.sort_unstable_by(|&a, &b| {
             if Some(a) == best_move_hint {
                 return std::cmp::Ordering::Less;
@@ -141,19 +153,156 @@ impl MinimaxBot {
                 return std::cmp::Ordering::Greater;
             }
 
+            // Winning Move Check
+            let a_wins = me.check_win_with_added_piece(&board.winning_masks, a);
+            let b_wins = me.check_win_with_added_piece(&board.winning_masks, b);
+            if a_wins != b_wins {
+                return if a_wins {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+            }
+
+            // Forced Move Check
+            let a_blocks = op.check_win_with_added_piece(&board.winning_masks, a);
+            let b_blocks = op.check_win_with_added_piece(&board.winning_masks, b);
+            if a_blocks != b_blocks {
+                return if a_blocks {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+            }
+
             let is_k_a = Some(a) == killer0 || Some(a) == killer1;
             let is_k_b = Some(b) == killer0 || Some(b) == killer1;
-            if is_k_a && !is_k_b {
-                return std::cmp::Ordering::Less;
-            }
-            if !is_k_a && is_k_b {
-                return std::cmp::Ordering::Greater;
+            if is_k_a != is_k_b {
+                return if is_k_a {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
             }
 
             self.strategic_values[b].cmp(&self.strategic_values[a])
         });
 
         count
+    }
+
+    #[inline]
+    fn get_line_score(x: u32, o: u32) -> i32 {
+        if o == 0 {
+            if x == 2 {
+                return 10;
+            }
+            if x == 1 {
+                return 1;
+            }
+        } else if x == 0 {
+            if o == 2 {
+                return -10;
+            }
+            if o == 1 {
+                return -1;
+            }
+        }
+        0
+    }
+
+    fn calculate_score_delta(&self, board: &BitBoardState, index: usize, player: Player) -> i32 {
+        let mut delta = 0;
+        match &*board.winning_masks {
+            WinningMasks::Small {
+                cell_mask_lookup, ..
+            } => {
+                let p1 = match board.p1 {
+                    BitBoard::Small(b) => b,
+                    _ => 0,
+                };
+                let p2 = match board.p2 {
+                    BitBoard::Small(b) => b,
+                    _ => 0,
+                };
+                if let Some(masks) = cell_mask_lookup.get(index) {
+                    for &m in masks {
+                        let x = (p1 & m).count_ones();
+                        let o = (p2 & m).count_ones();
+                        let old_score = Self::get_line_score(x, o);
+
+                        let (nx, no) = match player {
+                            Player::X => (x + 1, o),
+                            Player::O => (x, o + 1),
+                        };
+                        let new_score = Self::get_line_score(nx, no);
+                        delta += new_score - old_score;
+                    }
+                }
+            }
+            WinningMasks::Medium {
+                cell_mask_lookup, ..
+            } => {
+                let p1 = match board.p1 {
+                    BitBoard::Medium(b) => b,
+                    _ => 0,
+                };
+                let p2 = match board.p2 {
+                    BitBoard::Medium(b) => b,
+                    _ => 0,
+                };
+                if let Some(masks) = cell_mask_lookup.get(index) {
+                    for &m in masks {
+                        let x = (p1 & m).count_ones();
+                        let o = (p2 & m).count_ones();
+                        let old_score = Self::get_line_score(x, o);
+
+                        let (nx, no) = match player {
+                            Player::X => (x + 1, o),
+                            Player::O => (x, o + 1),
+                        };
+                        let new_score = Self::get_line_score(nx, no);
+                        delta += new_score - old_score;
+                    }
+                }
+            }
+            WinningMasks::Large {
+                masks,
+                map_flat,
+                map_offsets,
+            } => {
+                if index < map_offsets.len() {
+                    let (start, count) = map_offsets[index];
+                    let range = start as usize..(start + count) as usize;
+                    for &i in &map_flat[range] {
+                        let mask_chunks = &masks[i];
+                        let mut x = 0;
+                        let mut o = 0;
+                        match (&board.p1, &board.p2) {
+                            (BitBoard::Large(v1), BitBoard::Large(v2)) => {
+                                for (k, m) in mask_chunks.iter().enumerate() {
+                                    if k < v1.len() {
+                                        x += (v1[k] & m).count_ones();
+                                    }
+                                    if k < v2.len() {
+                                        o += (v2[k] & m).count_ones();
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        let old_score = Self::get_line_score(x, o);
+                        let (nx, no) = match player {
+                            Player::X => (x + 1, o),
+                            Player::O => (x, o + 1),
+                        };
+                        let new_score = Self::get_line_score(nx, no);
+                        delta += new_score - old_score;
+                    }
+                }
+            }
+        }
+        delta
     }
 
     fn minimax(
@@ -164,6 +313,7 @@ impl MinimaxBot {
         mut alpha: i32,
         mut beta: i32,
         current_hash: u64,
+        current_score: i32,
     ) -> i32 {
         let alpha_orig = alpha;
 
@@ -198,14 +348,20 @@ impl MinimaxBot {
         }
 
         if depth >= self.max_depth {
-            return self.evaluate(board);
+            return current_score;
         }
 
         let opponent = current_player.opponent();
 
         // Use a stack buffer for moves.
         let mut moves_buf = [0usize; 256];
-        let count = self.get_sorted_moves_into(board, &mut moves_buf, best_move_hint, depth);
+        let count = self.get_sorted_moves_into(
+            board,
+            &mut moves_buf,
+            best_move_hint,
+            depth,
+            current_player,
+        );
         let moves = &moves_buf[0..count];
 
         let mut best_val = match current_player {
@@ -222,6 +378,10 @@ impl MinimaxBot {
         };
 
         for &idx in moves {
+            // Incremental score
+            let score_delta = self.calculate_score_delta(board, idx, current_player);
+            let next_score = current_score + score_delta;
+
             board.set_cell(idx, current_player).unwrap();
 
             let new_hash = current_hash ^ self.zobrist_keys[idx][p_idx];
@@ -235,7 +395,15 @@ impl MinimaxBot {
                     Player::O => -1000 + depth as i32,
                 }
             } else {
-                self.minimax(board, depth + 1, opponent, alpha, beta, new_hash)
+                self.minimax(
+                    board,
+                    depth + 1,
+                    opponent,
+                    alpha,
+                    beta,
+                    new_hash,
+                    next_score,
+                )
             };
 
             board.clear_cell(idx);
@@ -271,8 +439,7 @@ impl MinimaxBot {
             // This happens if no moves are valid, which implies full board, but we checked is_full.
             // Or if we pruned everything? But we loop at least once if not full.
             // If moves is empty, loop doesn't run.
-            // If moves empty, is_full check should have caught it.
-            // But if is_full check didn't catch it for some reason?
+            // If is_full check didn't catch it for some reason?
             // Let's assume best_val is updated or 0 if empty?
             // Actually, if loop doesn't run, best_val is MIN/MAX.
             // is_full() checks count.
@@ -368,7 +535,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         self.ensure_initialized(board);
 
         let mut moves_buf = [0usize; 256];
-        let count = self.get_sorted_moves_into(board, &mut moves_buf, None, 0);
+        let count = self.get_sorted_moves_into(board, &mut moves_buf, None, 0, player);
         let available_moves = &moves_buf[0..count];
 
         if available_moves.is_empty() {
@@ -380,11 +547,15 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
         let mut work_board = board.clone();
 
         let initial_hash = self.calculate_zobrist_hash(&work_board);
+        let initial_score = self.evaluate(board);
 
         let p_idx = match player {
             Player::X => 0,
             Player::O => 1,
         };
+
+        let first_delta = self.calculate_score_delta(board, first_move, player);
+        let first_next_score = initial_score + first_delta;
 
         work_board.set_cell(first_move, player).unwrap();
 
@@ -410,6 +581,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                 i32::MIN + 1,
                 i32::MAX - 1,
                 next_hash,
+                first_next_score,
             )
         };
 
@@ -435,6 +607,8 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                 // Just compute from scratch or clone?
                 // Since we clone board, hash is same as initial.
                 // We can reuse `initial_hash`.
+                let delta = self.calculate_score_delta(board, mv, player);
+                let next_score = initial_score + delta;
 
                 work_board.set_cell(mv, player).unwrap();
                 let next_hash = initial_hash ^ self.zobrist_keys[mv][p_idx];
@@ -455,6 +629,7 @@ impl PlayerStrategy<BitBoardState> for MinimaxBot {
                         alpha,
                         beta,
                         next_hash,
+                        next_score,
                     )
                 };
 
